@@ -1,5 +1,7 @@
 name: Build and Push Docker Image
 
+# Releases publish on a `v*` tag. `workflow_dispatch` stays available so any
+# branch can be built on demand from the Actions tab.
 on:
   push:
     tags:
@@ -7,18 +9,38 @@ on:
   workflow_dispatch:
 
 env:
+  # Resolves to the repository that runs this workflow, so a fork publishes to
+  # its own namespace instead of the upstream one.
   GHCR_IMAGE: ghcr.io/${{ github.repository }}
-  DOCKERHUB_IMAGE: decolua/9router
 
 jobs:
-  build-and-push:
-    runs-on: ubuntu-latest
+  # Each architecture builds natively on its own runner and pushes an untagged
+  # image by digest. Cross-building both on one amd64 runner meant emulating
+  # arm64 through QEMU for the whole builder stage — compiling better-sqlite3
+  # from source and running the Next build — which took over an hour. Native
+  # ARM runners are free for public repositories.
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Prepare platform slug
+        id: platform
+        run: echo "slug=${PLATFORM//\//-}" >> "$GITHUB_OUTPUT"
+        env:
+          PLATFORM: ${{ matrix.platform }}
 
       - uses: docker/setup-buildx-action@v3
 
@@ -29,32 +51,93 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Log in to Docker Hub
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          # No tags here: the merge job assembles the tagged multi-arch image
+          # from these digests. `push-by-digest` needs outputs, not `push`.
+          outputs: type=image,name=${{ env.GHCR_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          # Per-arch cache, so the two legs never overwrite each other's layers.
+          cache-from: type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache-${{ steps.platform.outputs.slug }}
+          cache-to: type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache-${{ steps.platform.outputs.slug }},mode=max
+          provenance: false
+          sbom: false
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ steps.platform.outputs.slug }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: |
-            ${{ env.GHCR_IMAGE }}
-            ${{ env.DOCKERHUB_IMAGE }}
+          images: ${{ env.GHCR_IMAGE }}
           tags: |
+            # Release: v0.5.56 → 0.5.56, 0.5 and latest.
             type=semver,pattern={{version}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{major}}.{{minor}}
+            # latest on any release tag, and on a manual (workflow_dispatch) run
+            # from the default branch — so `docker compose pull latest` always
+            # tracks the newest built image even when no v* tag was pushed.
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) }}
+            # Manual run from a branch → branch name (slashes become dashes).
+            type=ref,event=branch
+            # Always present, so the tag list is never empty and every image is
+            # traceable back to a commit.
+            type=sha,format=short
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache
-          cache-to: type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache,mode=max
-          platforms: linux/amd64,linux/arm64
-          provenance: false
-          sbom: false
+      - name: Create multi-arch manifest
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.GHCR_IMAGE }}@sha256:%s ' *)
+
+      - name: Inspect and summarize
+        run: |
+          VERSION='${{ steps.meta.outputs.version }}'
+          docker buildx imagetools inspect "${GHCR_IMAGE}:${VERSION}"
+          {
+            echo "### Published images"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

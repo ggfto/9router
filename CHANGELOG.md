@@ -1,4 +1,19 @@
-# v0.5.81 (2026-09-18)
+# Unreleased
+
+## Fixes
+- **Proxy-Pools**: the pool now actually applies to the traffic it was bound to.
+  `strictProxy` never reached the request path (`auth.js` dropped it when
+  building `providerSpecificData`, `chatCore` never read it), so a strict pool
+  silently fell back to a direct connection on any proxy error. OAuth token
+  refresh went out unproxied everywhere; all upstream paths now inherit the
+  connection's proxy context.
+- **Models**: disabling a model is enforced when routing, not only when listing.
+
+## Chores
+- **CI**: `docker-publish` is fork-safe, applies `latest` on release tags and
+  manual default-branch runs, and always emits a `sha-` tag.
+
+
 
 ## Features
 - **Xiaomi MiMo**: merge MiMo Desktop support into `xiaomi-mimo` with dual auth (API key + Desktop/OAuth session), Preview models support, and encrypted-callback OAuth flow
@@ -234,6 +249,11 @@
   tabs tripping 429; manual refresh (↻) sends `force=1` to bypass the cache
 
 ## Fixes
+- **NVIDIA**: drop three models NVIDIA has retired and repoint DeepSeek V4 Flash
+  at its live id — `minimaxai/minimax-m2.7` (EOL 2026-07-27),
+  `deepseek-ai/deepseek-v4-pro` and `deepseek-ai/deepseek-v4-flash` (both EOL
+  2026-08-07) answer `410 Gone`, so the catalog advertised them and every route
+  to them failed at call time
 - **Docker**: ship `sql.js` in the image so the pure-JS DB fallback can start —
   file tracing carried the package's JS without `dist/sql-wasm.wasm`, so a
   container with no native driver aborted with ENOENT and never got a database
