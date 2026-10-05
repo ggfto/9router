@@ -11,6 +11,16 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+// Mock proxyFetch: the handlers now egress through proxyAwareFetch (fork:
+// proxy pool on every upstream call), which captures the native fetch at
+// import time. Delegate to the global so the fetch stubs below see the calls.
+vi.mock("open-sse/utils/proxyFetch.js", async (importOriginal) => ({
+  ...(await importOriginal()),
+  proxyAwareFetch: (url, init) => globalThis.fetch(url, init),
+  default: (url, init) => globalThis.fetch(url, init),
+}));
+
+
 vi.mock("open-sse/services/tokenRefresh.js", async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, refreshTokenByProvider: vi.fn(), refreshVertexToken: vi.fn() };

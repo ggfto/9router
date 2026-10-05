@@ -92,7 +92,7 @@ describe("proxy pool → strictProxy propagation", () => {
     expect(resolved.vercelRelayUrl).toBe("https://relay.example.workers.dev");
   });
 
-  it("an inactive STRICT pool throws instead of falling back to direct", async () => {
+  it("an inactive STRICT pool resolves to no proxy but KEEPS strictProxy", async () => {
     proxyPools.set("pool-dead", {
       id: "pool-dead",
       isActive: false,
@@ -101,11 +101,15 @@ describe("proxy pool → strictProxy propagation", () => {
       type: "http",
     });
 
-    // Strict mode means "never egress direct". A bound-but-unusable pool
-    // used to warn and fall through to direct, silently violating that.
-    await expect(
-      resolveConnectionProxyConfig({ proxyPoolId: "pool-dead" })
-    ).rejects.toThrow(/unusable.*strictProxy/);
+    // Strict mode means "never egress direct". A bound-but-unusable pool used
+    // to resolve with strictProxy:false and fall through to direct. Upstream
+    // #4333 keeps strictProxy:true on the no-proxy result, and proxyFetch then
+    // refuses to send ("Proxy required but none resolved"). That is the
+    // guarantee this test pins: the flag survives, so the request never leaves
+    // over the direct IP.
+    const resolved = await resolveConnectionProxyConfig({ proxyPoolId: "pool-dead" });
+    expect(resolved.strictProxy).toBe(true);
+    expect(resolved.connectionProxyEnabled).toBeFalsy();
   });
 
   it("an inactive NON-strict pool still resolves to no proxy (and does not claim strict)", async () => {
