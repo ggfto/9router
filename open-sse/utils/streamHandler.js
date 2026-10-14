@@ -1,5 +1,5 @@
 // Stream handler with disconnect detection - shared for all providers
-import { STREAM_STALL_TIMEOUT_MS } from "../config/runtimeConfig.js";
+import { STREAM_STALL_TIMEOUT_MS, SSE_KEEPALIVE_MS } from "../config/runtimeConfig.js";
 import { dbg, isDebugEnabled } from "./debugLog.js";
 
 // Get HH:MM:SS timestamp
@@ -192,8 +192,9 @@ export function createDisconnectAwareStream(transformStream, streamController, o
  * @param {TransformStream} transformStream - Transform stream for SSE
  * @param {object} streamController - Stream controller from createStreamController
  */
-export function pipeWithDisconnect(providerResponse, transformStream, streamController, onAbortTerminal = null, stallTimeoutMs = STREAM_STALL_TIMEOUT_MS) {
+export function pipeWithDisconnect(providerResponse, transformStream, streamController, onAbortTerminal = null, stallTimeoutMs = STREAM_STALL_TIMEOUT_MS, keepaliveMs = SSE_KEEPALIVE_MS) {
   let stallTimer = null;
+  let keepaliveTimer = null;
   let chunkCount = 0;
   let totalBytes = 0;
   let lastChunkAt = Date.now();
@@ -203,10 +204,14 @@ export function pipeWithDisconnect(providerResponse, transformStream, streamCont
   const clearStall = () => {
     if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
   };
+  const clearKeepalive = () => {
+    if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
+  };
   const armStall = () => {
     clearStall();
     stallTimer = setTimeout(() => {
       stallTimer = null;
+      clearKeepalive();
       abortMessage = "stream stall timeout";
       dbg(tag, `STALL TIMEOUT ${stallTimeoutMs}ms | chunks=${chunkCount} | bytes=${totalBytes} | sinceLast=${Date.now() - lastChunkAt}ms`);
       streamController.handleError?.(new Error("stream stall timeout"));
@@ -214,23 +219,50 @@ export function pipeWithDisconnect(providerResponse, transformStream, streamCont
     }, stallTimeoutMs);
   };
 
-  // Wrap controller so every termination path clears the stall timer.
-  // Without this, abort/cancel/downstream-error paths leave the timer armed
-  // and a stale abort could fire after the request has already ended.
+  // Wrap controller so every termination path clears the stall + keepalive timers.
+  // Without this, abort/cancel/downstream-error paths leave timers armed
+  // and a stale abort/keepalive could fire after the request has already ended.
   const wrappedController = {
     signal: streamController.signal,
     startTime: streamController.startTime,
     isConnected: () => streamController.isConnected(),
-    handleComplete: () => { dbg(tag, `complete | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); streamController.handleComplete(); },
-    handleError: (e) => { dbg(tag, `error: ${e?.message} | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); streamController.handleError(e); },
-    handleDisconnect: (r) => { dbg(tag, `disconnect: ${r} | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); streamController.handleDisconnect(r); },
-    abort: () => { clearStall(); streamController.abort(); }
+    handleComplete: () => { dbg(tag, `complete | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); clearKeepalive(); streamController.handleComplete(); },
+    handleError: (e) => { dbg(tag, `error: ${e?.message} | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); clearKeepalive(); streamController.handleError(e); },
+    handleDisconnect: (r) => { dbg(tag, `disconnect: ${r} | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); clearKeepalive(); streamController.handleDisconnect(r); },
+    abort: () => { clearStall(); clearKeepalive(); streamController.abort(); }
   };
 
   armStall();
-  dbg(tag, `pipe start | stallTimeout=${stallTimeoutMs}ms`);
+  dbg(tag, `pipe start | stallTimeout=${stallTimeoutMs}ms | keepalive=${keepaliveMs}ms`);
+
+  // Adaptado de decolua/9router#3457 (Badar Rahman): keepalive durante silêncio
+  // do upstream para proxies não darem timeout. Diferenças: default 0 (OFF),
+  // formato `: keepalive` (comentário SSE, ignorado por clientes) em vez de
+  // `event: ping`, e checagem de ociosidade para não duplicar quando o upstream
+  // já mandou bytes/comentário recentemente.
+  const keepaliveEncoder = new TextEncoder();
+  const keepaliveBytes = keepaliveEncoder.encode(": keepalive\n\n");
 
   const upstreamTap = new TransformStream({
+    start(controller) {
+      if (keepaliveMs > 0) {
+        keepaliveTimer = setInterval(() => {
+          if (!streamController.isConnected()) {
+            clearKeepalive();
+            return;
+          }
+          // Não duplica: se o upstream mandou algo há menos de um intervalo,
+          // o silêncio ainda não justifica um keepalive.
+          if (Date.now() - lastChunkAt < keepaliveMs) return;
+          dbg(tag, `keepalive sent (silence=${Date.now() - lastChunkAt}ms)`);
+          try {
+            controller.enqueue(keepaliveBytes);
+          } catch {
+            clearKeepalive();
+          }
+        }, keepaliveMs);
+      }
+    },
     transform(chunk, controller) {
       chunkCount++;
       const sz = chunk?.byteLength || chunk?.length || 0;
@@ -244,7 +276,7 @@ export function pipeWithDisconnect(providerResponse, transformStream, streamCont
       armStall();
       controller.enqueue(chunk);
     },
-    flush() { dbg(tag, `upstream EOF | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); }
+    flush() { dbg(tag, `upstream EOF | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); clearKeepalive(); }
   });
 
   const transformedBody = providerResponse.body

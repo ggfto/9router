@@ -55,6 +55,18 @@ export const STREAM_STALL_TIMEOUT_MS = envMs("STREAM_STALL_TIMEOUT_MS", 360 * 10
 // Time-to-first-token timeout (prompt prefill). Env: STREAM_FIRST_CHUNK_TIMEOUT_MS.
 export const STREAM_FIRST_CHUNK_TIMEOUT_MS = envMs("STREAM_FIRST_CHUNK_TIMEOUT_MS", 200 * 1000);
 
+// SSE keepalive comment interval during upstream silence (e.g. slow TTFT behind
+// reverse proxies). Env: SSE_KEEPALIVE_MS. Default 0 = OFF. When >0,
+// pipeWithDisconnect emits `: keepalive` comments while upstream is silent.
+// Adaptado de decolua/9router#3457 (que usava `event: ping` com default 10s):
+// aqui o default é desligado e o formato é comentário SSE, ignorado por clientes.
+export const SSE_KEEPALIVE_MS = (() => {
+  const raw = process.env.SSE_KEEPALIVE_MS;
+  if (raw == null || raw === "") return 0;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+})();
+
 // Fetch connect timeout: abort if upstream doesn't return response headers within this duration
 export const FETCH_CONNECT_TIMEOUT_MS = envMs("FETCH_CONNECT_TIMEOUT_MS", 60 * 1000);
 
