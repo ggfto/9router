@@ -16,6 +16,14 @@
 // NOT pinned: exact JSON key order, region hosts, ElevenLabs account entitlements.
 import { describe, it, expect, vi, afterEach } from "vitest";
 
+// The fork routes STT REST calls through proxyAwareFetch, which captures the
+// native fetch at import time — so the stubFetch() below would never see them.
+// Delegate to the global at call time, the same seam the other suites mock.
+vi.mock("open-sse/utils/proxyFetch.js", async (importOriginal) => ({
+  ...(await importOriginal()),
+  proxyAwareFetch: (url, options) => globalThis.fetch(url, options),
+}));
+
 import { handleSttCore } from "open-sse/handlers/sttCore.js";
 import { PROVIDER_MODELS } from "open-sse/config/providerModels.js";
 
