@@ -23,6 +23,13 @@ const refreshMiniMaxMock = vi.hoisted(() => vi.fn());
 vi.mock("../../open-sse/services/tokenRefresh.js", () => ({
   refreshMiniMaxCodeToken: refreshMiniMaxMock,
 }));
+// The fork routes refresh through proxyAwareFetch, which captures native fetch
+// at import time — delegate to the global at call time so globalThis.fetch
+// mocks below apply, same seam as elevenlabs/gemini-live STT suites.
+vi.mock("../../open-sse/utils/proxyFetch.js", async (importOriginal) => ({
+  ...(await importOriginal()),
+  proxyAwareFetch: (url, options) => globalThis.fetch(url, options),
+}));
 
 const { MinimaxCodeExecutor, normalizeQuotaResponse } = await import("../../open-sse/executors/minimax-code.js");
 const { getExecutor } = await import("../../open-sse/executors/index.js");
