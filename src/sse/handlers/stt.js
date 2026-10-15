@@ -5,6 +5,7 @@ import {
 import { getSettings, getCustomModels } from "@/lib/localDb";
 import { getModelInfo } from "../services/model.js";
 import { isModelDisabled } from "../services/disabledModels.js";
+import { getKeyAccessContext, enforceKeyAccessResolved } from "../services/keyAccess.js";
 import { handleSttCore } from "open-sse/handlers/sttCore.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
@@ -66,6 +67,10 @@ export async function handleStt(request) {
     log.warn("STT", `Model "${modelStr}" is disabled`, { provider, model });
     return errorResponse(HTTP_STATUS.FORBIDDEN, `Model "${modelStr}" is disabled`);
   }
+  // Per-key access control: checked before any credential lookup.
+  const keyAccessDenied = await enforceKeyAccessResolved(await getKeyAccessContext(request), modelStr, provider, model);
+  if (keyAccessDenied) return keyAccessDenied;
+
   log.info("ROUTING", `Provider: ${provider}, Model: ${model}`);
 
   const modelTransport = await resolveCustomModelTransport(provider, model);
