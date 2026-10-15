@@ -25,6 +25,7 @@ export default function APIPageClient({ machineId }) {
   const [showAddModal, setShowAddModal] = useState(false);
   const [newKeyName, setNewKeyName] = useState("");
   const [createdKey, setCreatedKey] = useState(null);
+  const [renameState, setRenameState] = useState(null);
   const [confirmState, setConfirmState] = useState(null);
 
   const [requireApiKey, setRequireApiKey] = useState(false);
@@ -694,6 +695,31 @@ export default function APIPageClient({ machineId }) {
     }
   };
 
+  const closeRenameModal = () => setRenameState(null);
+
+  const handleRenameKey = async () => {
+    if (!renameState) return;
+    const name = renameState.name.trim();
+    if (!name) return;
+    try {
+      const res = await fetch(`/api/keys/${renameState.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setKeys(prev => prev.map(k => k.id === renameState.id ? { ...k, name: data.key.name } : k));
+        closeRenameModal();
+      } else {
+        setRenameState(prev => prev && { ...prev, error: data.error || "Failed to rename key" });
+      }
+    } catch (error) {
+      console.log("Error renaming key:", error);
+      setRenameState(prev => prev && { ...prev, error: "Failed to rename key" });
+    }
+  };
+
   const maskKey = (fullKey) => {
     if (!fullKey || fullKey.length <= 10) return fullKey || "";
     return fullKey.slice(0, 6) + "•".repeat(fullKey.length - 10) + fullKey.slice(-4);
@@ -1090,6 +1116,13 @@ export default function APIPageClient({ machineId }) {
                     title={key.isActive ? "Pause key" : "Resume key"}
                   />
                   <button
+                    onClick={() => setRenameState({ id: key.id, name: key.name, error: "" })}
+                    className="p-2 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all"
+                    title="Rename key"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">edit</span>
+                  </button>
+                  <button
                     onClick={() => handleDeleteKey(key.id)}
                     className="p-2 hover:bg-red-500/10 rounded text-red-500 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all"
                   >
@@ -1130,6 +1163,34 @@ export default function APIPageClient({ machineId }) {
               variant="ghost"
               fullWidth
             >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Rename Key Modal */}
+      <Modal
+        isOpen={!!renameState}
+        title="Rename API Key"
+        onClose={closeRenameModal}
+      >
+        <div className="flex flex-col gap-4">
+          <Input
+            label="Key Name"
+            value={renameState?.name ?? ""}
+            onChange={(e) => setRenameState(prev => prev && { ...prev, name: e.target.value, error: "" })}
+            onKeyDown={(e) => { if (e.key === "Enter") handleRenameKey(); }}
+            maxLength={100}
+          />
+          {renameState?.error && (
+            <p className="text-xs text-red-500">{renameState.error}</p>
+          )}
+          <div className="flex gap-2">
+            <Button onClick={handleRenameKey} fullWidth disabled={!renameState?.name.trim()}>
+              Save
+            </Button>
+            <Button onClick={closeRenameModal} variant="ghost" fullWidth>
               Cancel
             </Button>
           </div>
