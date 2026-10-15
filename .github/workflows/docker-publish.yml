@@ -1,12 +1,22 @@
 name: Build and Push Docker Image
 
-# Releases publish on a `v*` tag. `workflow_dispatch` stays available so any
-# branch can be built on demand from the Actions tab.
+# Every push to master publishes `latest` (the lab tracks it). Releases publish
+# on a `v*` tag. `workflow_dispatch` stays available so any branch can be built
+# on demand from the Actions tab — only the default branch moves `latest`.
+# `stable` is never built here: it only moves through promote-stable.yml.
 on:
   push:
+    branches:
+      - master
     tags:
       - "v*"
   workflow_dispatch:
+
+# Queue runs per ref instead of overlapping, so two quick pushes to master can't
+# race and leave `latest` on the older commit.
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   # Resolves to the repository that runs this workflow, so a fork publishes to
@@ -114,10 +124,10 @@ jobs:
             # Release: v0.5.56 → 0.5.56, 0.5 and latest.
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            # latest on any release tag, and on a manual (workflow_dispatch) run
-            # from the default branch — so `docker compose pull latest` always
-            # tracks the newest built image even when no v* tag was pushed.
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) }}
+            # latest on any release tag and on any run (push or manual) from
+            # the default branch, so the lab's `:latest` follows master. A
+            # manual run from another branch gets only its branch and sha tags.
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') || github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
             # Manual run from a branch → branch name (slashes become dashes).
             type=ref,event=branch
             # Always present, so the tag list is never empty and every image is

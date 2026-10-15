@@ -185,3 +185,41 @@ GHCR publishing uses the workflow's `GITHUB_TOKEN` with package write permission
 The optional repository variables `ALPINE_MIRROR` and `NPM_REGISTRY` can override the default package mirrors used by the CI Docker build.
 
 Workflow: `.github/workflows/docker-publish.yml`
+
+## Fork channels on GHCR: `latest` and `stable`
+
+The fork (`ghcr.io/ggfto/9router`, or `ghcr.io/<owner>/<repo>` for any fork running these workflows) publishes two moving tags with different jobs:
+
+| Tag | Moves when | Who uses it |
+|---|---|---|
+| `latest` | Automatically, on every push to `master`, on every `v*` tag, and on a manual run of `Build and Push Docker Image` from `master` | Lab |
+| `stable` | Only when someone runs `Promote to stable` by hand. It is never built — it is retagged from an image that already exists | VPS |
+
+Every build also gets `sha-<short commit>` and its branch name; a `v*` tag adds the version (`0.5.99`, `0.5`). Version tags do **not** move `stable`. A manual build from any other branch gets only its branch and `sha-*` tags, never `latest`.
+
+### Promote to stable
+
+1. Actions → **Promote to stable** → **Run workflow**.
+2. In `source`, enter what to promote (default `latest`):
+   - a tag that already exists: `latest`, `sha-abc1234`, `0.5.99`;
+   - or a digest: `sha256:<64 hex>`.
+3. The job resolves the tag to a digest **before** retagging, runs `docker buildx imagetools create -t …:stable …@<digest>` (copies the manifest, no rebuild), checks that `stable` now points at that digest, and writes to the job summary the promoted digest and the previous `stable` digest.
+
+Promote a digest or a `sha-*` tag when you want to be certain what ships — `latest` may have moved since you tested it in the lab. The digest the lab is running can be read with:
+
+```bash
+docker inspect --format '{{index .RepoDigests 0}}' ghcr.io/ggfto/9router:latest
+```
+
+On the VPS, after promoting:
+
+```bash
+docker pull ghcr.io/ggfto/9router:stable
+# recreate the container (docker compose up -d, or rm + run)
+```
+
+### Roll back
+
+Rollback is a promotion of an older image. Open the summary of the last **Promote to stable** run, copy the **Previous stable** digest, and run **Promote to stable** again with that digest as `source`. Any older `sha-*` tag or version tag works too. Then pull `:stable` on the VPS again.
+
+Workflows: `.github/workflows/docker-publish.yml` (build, `latest`) and `.github/workflows/promote-stable.yml` (`stable`).
