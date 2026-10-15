@@ -1,0 +1,107 @@
+name: Promote to stable
+
+# `stable` is never built: this workflow only points it at an image that
+# docker-publish.yml already pushed. The VPS tracks `:stable`, so promoting is
+# the deploy gate and promoting an older digest is the rollback.
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "What to promote: a digest (sha256:...) or an existing tag (latest, sha-abc1234, 0.5.99)"
+        required: true
+        default: latest
+        type: string
+
+# Two promotions at once would race on the same tag; run them one at a time.
+concurrency:
+  group: promote-stable
+  cancel-in-progress: false
+
+env:
+  GHCR_IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The input goes through env, never interpolated into the script, and is
+      # validated before it reaches any docker command.
+      - name: Resolve source to a digest
+        id: resolve
+        env:
+          SOURCE: ${{ inputs.source }}
+        run: |
+          set -euo pipefail
+          SOURCE="$(printf '%s' "$SOURCE" | tr -d '[:space:]')"
+          if [[ "$SOURCE" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            REF="${GHCR_IMAGE}@${SOURCE}"
+          elif [[ "$SOURCE" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            if [[ "$SOURCE" == "stable" ]]; then
+              echo "::error::'stable' already is stable; pass the tag or digest to promote."
+              exit 1
+            fi
+            REF="${GHCR_IMAGE}:${SOURCE}"
+          else
+            echo "::error::Invalid source '${SOURCE}': expected sha256:<64 hex> or an image tag."
+            exit 1
+          fi
+          DIGEST="$(docker buildx imagetools inspect "$REF" --format '{{json .Manifest}}' | jq -r '.digest')"
+          if [[ ! "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "::error::Could not resolve '${REF}' to a digest (got '${DIGEST}')."
+            exit 1
+          fi
+          # Kept for the summary so a rollback target is one click away.
+          PREVIOUS="$(docker buildx imagetools inspect "${GHCR_IMAGE}:stable" --format '{{json .Manifest}}' 2>/dev/null | jq -r '.digest' || true)"
+          {
+            echo "source=${SOURCE}"
+            echo "digest=${DIGEST}"
+            echo "previous=${PREVIOUS:-none}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Promoting ${REF} -> ${DIGEST}"
+
+      - name: Retag as stable (no rebuild)
+        env:
+          DIGEST: ${{ steps.resolve.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create -t "${GHCR_IMAGE}:stable" "${GHCR_IMAGE}@${DIGEST}"
+
+      - name: Verify and summarize
+        env:
+          SOURCE: ${{ steps.resolve.outputs.source }}
+          DIGEST: ${{ steps.resolve.outputs.digest }}
+          PREVIOUS: ${{ steps.resolve.outputs.previous }}
+        run: |
+          set -euo pipefail
+          NOW="$(docker buildx imagetools inspect "${GHCR_IMAGE}:stable" --format '{{json .Manifest}}' | jq -r '.digest')"
+          docker buildx imagetools inspect "${GHCR_IMAGE}:stable"
+          if [[ "$NOW" != "$DIGEST" ]]; then
+            echo "::error::stable resolves to ${NOW}, expected ${DIGEST}."
+            exit 1
+          fi
+          {
+            echo "### Promoted to stable"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Source | \`${SOURCE}\` |"
+            echo "| Digest | \`${DIGEST}\` |"
+            echo "| Previous stable | \`${PREVIOUS}\` |"
+            echo ""
+            echo "Image: \`${GHCR_IMAGE}:stable\`"
+            echo ""
+            echo "Rollback: run this workflow again with source \`${PREVIOUS}\`."
+          } >> "$GITHUB_STEP_SUMMARY"
