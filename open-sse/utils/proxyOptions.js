@@ -11,7 +11,7 @@
 /**
  * @param {object} credentials - As returned by the app's auth service
  * @returns {{connectionProxyEnabled: boolean, connectionProxyUrl: string,
- *   connectionNoProxy: string, vercelRelayUrl: string, strictProxy: boolean}}
+ *   connectionNoProxy: string, vercelRelayUrl: string, proxyPoolId: string|null, strictProxy: boolean}}
  */
 export function buildProxyOptions(credentials) {
   const data = credentials?.providerSpecificData || {};
@@ -20,6 +20,8 @@ export function buildProxyOptions(credentials) {
     connectionProxyUrl: data.connectionProxyUrl || "",
     connectionNoProxy: data.connectionNoProxy || "",
     vercelRelayUrl: data.vercelRelayUrl || "",
+    // upstream v0.5.104: o executor cursor (h2) le proxyPoolId para o strict (#4696)
+    proxyPoolId: data.connectionProxyPoolId || null,
     strictProxy: data.connectionStrictProxy === true,
   };
 }

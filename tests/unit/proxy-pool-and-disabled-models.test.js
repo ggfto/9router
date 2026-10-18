@@ -64,16 +64,19 @@ describe("proxy pool → strictProxy propagation", () => {
         connectionProxyEnabled: resolved.connectionProxyEnabled,
         connectionProxyUrl: resolved.connectionProxyUrl,
         connectionNoProxy: resolved.connectionNoProxy,
+        connectionProxyPoolId: resolved.proxyPoolId || null,
         connectionStrictProxy: resolved.strictProxy === true,
         vercelRelayUrl: resolved.vercelRelayUrl || "",
       },
     };
 
+    // proxyPoolId: o executor cursor do upstream (v0.5.104, #4696) decide o strict do h2 por ele
     expect(buildProxyOptions(credentials)).toEqual({
       connectionProxyEnabled: true,
       connectionProxyUrl: "http://user:pass@127.0.0.1:7890",
       connectionNoProxy: "localhost",
       vercelRelayUrl: "",
+      proxyPoolId: "pool-1",
       strictProxy: true,
     });
   });
@@ -133,6 +136,7 @@ describe("proxy pool → strictProxy propagation", () => {
       connectionProxyUrl: "",
       connectionNoProxy: "",
       vercelRelayUrl: "",
+      proxyPoolId: null,
       strictProxy: false,
     });
   });

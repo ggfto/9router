@@ -1,6 +1,6 @@
 import { PROVIDERS } from "../config/providers.js";
 import { OAUTH_ENDPOINTS, REFRESH_LEAD_MS } from "../config/appConstants.js";
-import { proxyAwareFetch } from "../utils/proxyFetch.js";
+import { proxyAwareFetch, runWithProxyOptions } from "../utils/proxyFetch.js";
 import {
   refreshXaiToken,
   refreshAccessToken,
@@ -19,6 +19,7 @@ import {
   refreshZedToken,
   refreshWindsurfToken,
   refreshMiniMaxCodeToken,
+  refreshNousToken,
   classifyOAuthRefreshError,
 } from "./tokenRefresh/providers.js";
 
@@ -40,6 +41,7 @@ export {
   refreshZedToken,
   refreshWindsurfToken,
   refreshMiniMaxCodeToken,
+  refreshNousToken,
   classifyOAuthRefreshError,
 };
 
@@ -165,6 +167,8 @@ const REFRESH_HANDLERS = {
   // value and classifies invalid_grant (docs/minimax-code-proxy-plan.md §2.3)
   "minimax-code": (c, log, px) => refreshMiniMaxCodeToken("minimax-code", c.refreshToken, log, px),
   "minimax-code-global": (c, log, px) => refreshMiniMaxCodeToken("minimax-code-global", c.refreshToken, log, px),
+  // Nous (upstream v0.5.104) usa fetch puro: o contexto ambiente leva o proxy da conexao
+  nous: (c, log, px) => runWithProxyOptions(px, () => refreshNousToken(c.refreshToken, log)),
   vertex: vertexRefreshHandler,
   "vertex-partner": vertexRefreshHandler
 };
