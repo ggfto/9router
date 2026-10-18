@@ -2,6 +2,7 @@
 import * as log from "../utils/logger.js";
 import { getProviderConnectionById, updateProviderConnection } from "../../lib/localDb.js";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
+import { runWithProxyOptions } from "open-sse/utils/proxyFetch.js";
 import {
   getProjectIdForConnection,
   invalidateProjectId,
@@ -21,6 +22,7 @@ import {
   formatProviderCredentials as _formatProviderCredentials,
   getAllAccessTokens as _getAllAccessTokens,
   refreshKiroToken as _refreshKiroToken,
+  refreshNousToken as _refreshNousToken,
   getRefreshLeadMs as _getRefreshLeadMs
 } from "open-sse/services/tokenRefresh.js";
 import {
@@ -55,6 +57,10 @@ export const refreshCopilotToken = (githubAccessToken, proxyOptions = null) =>
 
 export const refreshKiroToken = (refreshToken, providerSpecificData, proxyOptions = null) =>
   _refreshKiroToken(refreshToken, providerSpecificData, log, proxyOptions);
+
+// Nous (upstream v0.5.104) usa fetch puro: o contexto ambiente leva o proxy da conexao
+export const refreshNousToken = (refreshToken, proxyOptions = null) =>
+  runWithProxyOptions(proxyOptions, () => _refreshNousToken(refreshToken, log));
 
 export const getAccessToken = (provider, credentials, proxyOptions = null) =>
   _getAccessToken(provider, credentials, log, proxyOptions);
@@ -167,6 +173,7 @@ export async function updateProviderCredentials(connectionId, newCredentials) {
 
     if (newCredentials.accessToken)         updates.accessToken  = newCredentials.accessToken;
     if (newCredentials.refreshToken)        updates.refreshToken = newCredentials.refreshToken;
+    if (newCredentials.apiKey)              updates.apiKey       = newCredentials.apiKey;
     if (newCredentials.idToken)             updates.idToken = newCredentials.idToken;
     if (newCredentials.lastRefreshAt)       updates.lastRefreshAt = newCredentials.lastRefreshAt;
     if (newCredentials.expiresAt)           updates.expiresAt = newCredentials.expiresAt;
