@@ -1,4 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+// The fork routes embeddings through proxyAwareFetch, which captures the native
+// fetch at import time — so the fetch stub below would never see them. Delegate
+// to the global at call time, the same seam embeddingsCore.test.js mocks.
+vi.mock("../../open-sse/utils/proxyFetch.js", async (importOriginal) => ({
+  ...(await importOriginal()),
+  proxyAwareFetch: (url, options) => globalThis.fetch(url, options),
+}));
+
 import { getEmbeddingAdapter } from "../../open-sse/handlers/embeddingProviders/index.js";
 import { handleEmbeddingsCore } from "../../open-sse/handlers/embeddingsCore.js";
 import { AI_PROVIDERS, getProvidersByKind } from "../../src/shared/constants/providers.js";
