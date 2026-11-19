@@ -105,6 +105,15 @@ export class DefaultExecutor extends BaseExecutor {
         if (transformed === body) transformed = { ...transformed };
         delete transformed.stream_options;
       }
+      // chatCore streams a request that omits `stream` (body.stream !== false), but the
+      // same-format path forwards the body as the client sent it. An OpenAI-compatible
+      // upstream defaults to non-stream, answers plain JSON, and that JSON is relayed as
+      // text/event-stream: clients get a malformed stream and the combo empty-peek (which
+      // reads `data:` frames) judges every member empty and fails the combo over.
+      if (stream === true && transformed.stream === undefined && this.provider?.startsWith?.("openai-compatible-")) {
+        if (transformed === body) transformed = { ...transformed };
+        transformed.stream = true;
+      }
       // quirk: some openai-compatible providers reject Anthropic's client_metadata field
       if (this.config.quirks?.dropClientMetadata) {
         delete transformed.client_metadata;
