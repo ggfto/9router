@@ -19,6 +19,12 @@ describe("openai-compatible upstream stream flag", () => {
     expect(out.stream).toBe(true);
   });
 
+  it("does not mutate the client body (combos reuse it for every member)", () => {
+    const original = body();
+    new DefaultExecutor(NODE).transformRequest("qwen/qwen3.8-27b", original, true, creds);
+    expect(original.stream).toBeUndefined();
+  });
+
   it("does not add stream when the handler is not streaming", () => {
     const out = new DefaultExecutor(NODE).transformRequest("qwen/qwen3.8-27b", body(), false, creds);
     expect(out.stream).toBeUndefined();

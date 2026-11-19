@@ -96,7 +96,7 @@ export class DefaultExecutor extends BaseExecutor {
   }
 
   transformRequest(model, body, stream, credentials) {
-    const transformed = this.applyJsonSchemaFallback(this.applyNousAttribution(model, body, stream, credentials));
+    let transformed = this.applyJsonSchemaFallback(this.applyNousAttribution(model, body, stream, credentials));
 
     if (transformed && typeof transformed === "object") {
       // quirk: some openai-compatible providers reject Anthropic's client_metadata field
@@ -108,7 +108,10 @@ export class DefaultExecutor extends BaseExecutor {
       // the body as the client sent it. An openai-compatible upstream that defaults to
       // non-stream then answers plain JSON, relayed as text/event-stream: clients get a
       // broken stream and the combo empty-peek (no `data:` frame) fails every member over.
+      // Copy instead of mutating: a combo reuses the client body for every member, and
+      // body.stream === true would change how chatCore treats the next ones.
       if (stream === true && transformed.stream === undefined && this.provider?.startsWith?.("openai-compatible-")) {
+        if (transformed === body) transformed = { ...transformed };
         transformed.stream = true;
       }
     }
