@@ -104,6 +104,13 @@ export class DefaultExecutor extends BaseExecutor {
         delete transformed.client_metadata;
       }
       stripUnsupportedParams(this.provider, model, transformed);
+      // chatCore streams a request that omits `stream`, but the same-format path forwards
+      // the body as the client sent it. An openai-compatible upstream that defaults to
+      // non-stream then answers plain JSON, relayed as text/event-stream: clients get a
+      // broken stream and the combo empty-peek (no `data:` frame) fails every member over.
+      if (stream === true && transformed.stream === undefined && this.provider?.startsWith?.("openai-compatible-")) {
+        transformed.stream = true;
+      }
     }
 
     return injectReasoningContent({ provider: this.provider, model, body: transformed });
