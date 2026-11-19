@@ -151,3 +151,122 @@ jobs:
             echo "${{ steps.meta.outputs.tags }}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Opens a PR on ggfto/infra that pins the new multi-arch digest in
+  # k8s/vps/9router/kustomization.yaml, so the VPS (k3s + Argo CD) updates by a
+  # reviewed merge instead of a manual redeploy. Only for the default branch: a
+  # manual run from another branch publishes images but never proposes a deploy.
+  # Needs a GitHub App installed ONLY on ggfto/infra (Contents and Pull requests:
+  # read and write) with its id and key in INFRA_APP_ID / INFRA_APP_PRIVATE_KEY.
+  # Without them the job is skipped with a notice, never failed.
+  infra-pr:
+    needs: merge
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      KUSTOMIZATION: k8s/vps/9router/kustomization.yaml
+
+    steps:
+      - name: Check App credentials
+        id: creds
+        env:
+          APP_ID: ${{ secrets.INFRA_APP_ID }}
+          APP_KEY: ${{ secrets.INFRA_APP_PRIVATE_KEY }}
+        run: |
+          if [ -n "$APP_ID" ] && [ -n "$APP_KEY" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::INFRA_APP_ID/INFRA_APP_PRIVATE_KEY not set; skipping the infra PR."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.creds.outputs.ok == 'true'
+        with:
+          sparse-checkout: package.json
+          sparse-checkout-cone-mode: false
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.creds.outputs.ok == 'true'
+
+      # The merge job tags every image `sha-<7 chars>`; resolve that tag to the
+      # digest of the manifest list (the package is public, no login needed).
+      - name: Resolve digest and version
+        id: image
+        if: steps.creds.outputs.ok == 'true'
+        run: |
+          set -euo pipefail
+          SHORT="${GITHUB_SHA::7}"
+          DIGEST=$(docker buildx imagetools inspect "${GHCR_IMAGE}:sha-${SHORT}" --format '{{json .Manifest}}' | jq -r .digest)
+          [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "::error::bad digest '$DIGEST'"; exit 1; }
+          VERSION=$(jq -r .version package.json)
+          { echo "short=$SHORT"; echo "digest=$DIGEST"; echo "version=$VERSION"; } >> "$GITHUB_OUTPUT"
+
+      - name: Create App token for ggfto/infra
+        id: token
+        if: steps.creds.outputs.ok == 'true'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.INFRA_APP_ID }}
+          private-key: ${{ secrets.INFRA_APP_PRIVATE_KEY }}
+          owner: ggfto
+          repositories: infra
+
+      - uses: actions/checkout@v4
+        if: steps.creds.outputs.ok == 'true'
+        with:
+          repository: ggfto/infra
+          ref: master
+          token: ${{ steps.token.outputs.token }}
+          path: infra
+
+      # Rewrites the two lines the kustomization keeps in a fixed format:
+      #   # sha-<short> = <version> (manifest list amd64+arm64). ...
+      #   digest: sha256:<64 hex>
+      - name: Open PR on ggfto/infra
+        if: steps.creds.outputs.ok == 'true'
+        working-directory: infra
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          SHORT: ${{ steps.image.outputs.short }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          VERSION: ${{ steps.image.outputs.version }}
+          APP_SLUG: ${{ steps.token.outputs.app-slug }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if grep -q "digest: ${DIGEST}$" "$KUSTOMIZATION"; then
+            echo "::notice::infra already pins ${DIGEST}; nothing to do."
+            exit 0
+          fi
+          BRANCH="bump/9router-sha-${SHORT}"
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then
+            echo "::notice::branch ${BRANCH} already exists on ggfto/infra; not opening another PR."
+            exit 0
+          fi
+          if [ "$(grep -c '^    digest: sha256:' "$KUSTOMIZATION")" != 1 ] \
+            || [ "$(grep -c '^    # sha-[0-9a-f]* = ' "$KUSTOMIZATION")" != 1 ]; then
+            echo "::error::${KUSTOMIZATION} lost the fixed '# sha-... =' / 'digest:' lines"
+            exit 1
+          fi
+          sed -i -E \
+            -e "s|^    # sha-[0-9a-f]+ = [^ ]+ |    # sha-${SHORT} = ${VERSION} |" \
+            -e "s|^    digest: sha256:[a-f0-9]{64}$|    digest: ${DIGEST}|" \
+            "$KUSTOMIZATION"
+          git diff --stat
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          git commit -q -am "feat: 9router da vps passa para ${VERSION} (digest sha-${SHORT})"
+          git push -q origin "$BRANCH"
+          gh pr create --base master --head "$BRANCH" \
+            --title "feat: 9router da vps passa para ${VERSION} (digest sha-${SHORT})" \
+            --body "Aberto pelo docker-publish do ggfto/9router (${RUN_URL}).
+
+          - Imagem: \`${GHCR_IMAGE}:sha-${SHORT}\` (${VERSION}), manifest list amd64+arm64
+          - Digest: \`${DIGEST}\`
+          - Commit: ggfto/9router@${GITHUB_SHA}
+
+          Deploy = merge aqui e promocao master -> stable. Rollback = reverter este PR."
