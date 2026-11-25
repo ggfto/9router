@@ -1,3 +1,4 @@
+import os from "node:os";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import fs from "fs";
 import path from "path";
@@ -52,15 +53,31 @@ describe("AUDIT-002: API key masking", () => {
     expect(livePath.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("byApiKey object keys should use masked key, not raw key", () => {
-    const source = fs.readFileSync(
-      path.resolve(REPO_ROOT, "src/lib/db/repos/usageRepo.js"),
-      "utf-8"
-    );
-    // The 24h path should use apiKeyMasked in the akKey template
-    expect(source).toContain("${apiKeyMasked}|${r.model}|${r.provider");
-    // Should NOT use raw r.apiKey in the key
-    expect(source).not.toContain("${r.apiKey}|${r.model}|${r.provider");
+  it("getUsageStats never serializes a raw API key, and keeps keys apart", async () => {
+    const previousDataDir = process.env.DATA_DIR;
+    process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "9router-audit-usage-"));
+    vi.resetModules();
+    delete global._dbAdapter;
+    try {
+      const { saveRequestUsage, getUsageStats } = await import("@/lib/db/repos/usageRepo.js");
+      // Same prefix and tail, so both have the same mask
+      const keys = ["sk-abcde-AAAAAAAAAAAA-wxyz", "sk-abcde-BBBBBBBBBBBB-wxyz"];
+      for (const apiKey of keys) {
+        await saveRequestUsage({
+          provider: "openai", model: "gpt-4o", apiKey, endpoint: "/v1/chat/completions",
+          tokens: { prompt_tokens: 1, completion_tokens: 1 }, status: "success",
+        });
+      }
+      for (const period of ["24h", "7d", "all"]) {
+        const stats = await getUsageStats(period);
+        const serialized = JSON.stringify(stats);
+        for (const apiKey of keys) expect(serialized, period).not.toContain(apiKey);
+        expect(Object.keys(stats.byApiKey), period).toHaveLength(2);
+      }
+    } finally {
+      if (previousDataDir === undefined) delete process.env.DATA_DIR;
+      else process.env.DATA_DIR = previousDataDir;
+    }
   });
 });
 

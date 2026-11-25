@@ -1,5 +1,6 @@
 import { getModelInfo } from "../services/model.js";
 import { getProviderCredentials } from "../services/auth.js";
+import { getDisabledReason } from "./disabledModels.js";
 import { checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { handleSystemoneCore } from "open-sse/handlers/systemoneCore.js";
 import {
@@ -56,6 +57,11 @@ export async function resolveSmartChoice({
     }
 
     const { provider, model } = modelInfo;
+    const disabledReason = await getDisabledReason(provider, model, targetModel);
+    if (disabledReason) {
+      log?.warn?.("COMBO", `smart-router: ${disabledReason}`);
+      return null;
+    }
     const credentials = await getProviderCredentials(provider, new Set(), model);
     if (!credentials || credentials.allRateLimited) {
       log?.warn?.("COMBO", `smart-router: no credentials available for router provider "${provider}"`);

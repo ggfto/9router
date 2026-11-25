@@ -29,7 +29,7 @@ describe("DefaultExecutor.buildHeaders() — claude provider", () => {
       headers["Anthropic-Version"] === "2023-06-01" ||
       headers["anthropic-version"] === "2023-06-01";
     expect(hasVersion).toBe(true);
-    expect(headers["User-Agent"]).toBe("claude-cli/2.1.280 (external, sdk-cli)");
+    expect(headers["User-Agent"]).toBe("claude-cli/2.1.322 (external, sdk-cli)");
   });
 
   it("includes heavy-agent beta flags for claude-opus-5", () => {
@@ -268,7 +268,9 @@ describe("proxyAwareFetch — api.anthropic.com routing", () => {
     vi.restoreAllMocks();
   });
 
-  it("routes api.anthropic.com to gotScraping (non-streaming) and returns ok response", async () => {
+  // got-scraping is disabled in proxyFetch.js ("use native fetch directly"), so
+  // the two cases about it are skipped until it is enabled again.
+  it.skip("routes api.anthropic.com to gotScraping (non-streaming) and returns ok response", async () => {
     // Mock got-scraping before module load
     vi.doMock("got-scraping", () => {
       const mockGotScraping = vi.fn().mockResolvedValue({
@@ -299,7 +301,7 @@ describe("proxyAwareFetch — api.anthropic.com routing", () => {
     expect(data.id).toBe("msg_test");
   });
 
-  it("falls back gracefully when got-scraping throws on non-streaming path", async () => {
+  it.skip("falls back gracefully when got-scraping throws on non-streaming path", async () => {
     vi.doMock("got-scraping", () => {
       const fn = vi.fn().mockRejectedValue(new Error("TLS error"));
       fn.stream = vi.fn();

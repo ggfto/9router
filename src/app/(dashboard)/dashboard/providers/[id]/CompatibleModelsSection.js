@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 import PropTypes from "prop-types";
-import { Button } from "@/shared/components";
+import { Button, Toggle } from "@/shared/components";
 import { getProviderCustomModelRows } from "@/shared/utils/providerCustomModels";
-function CompatibleModelRow({ modelId, fullModel, copied, onCopy, onDeleteAlias, onTest, testStatus, isTesting }) {
+function CompatibleModelRow({ modelId, fullModel, copied, onCopy, onDeleteAlias, onTest, testStatus, isTesting, enabled, onToggle }) {
   const borderColor = testStatus === "ok"
     ? "border-green-500/40"
     : testStatus === "error"
@@ -25,7 +25,7 @@ function CompatibleModelRow({ modelId, fullModel, copied, onCopy, onDeleteAlias,
       >
         {testStatus === "ok" ? "check_circle" : testStatus === "error" ? "cancel" : "smart_toy"}
       </span>
-      <div className="flex-1 min-w-0">
+      <div className={`flex-1 min-w-0 ${enabled ? "" : "opacity-40"}`}>
         <p className="text-sm font-medium truncate">{modelId}</p>
         <div className="flex items-center gap-1 mt-1">
           <code className="text-xs text-text-muted font-mono bg-sidebar px-1.5 py-0.5 rounded">{fullModel}</code>
@@ -42,7 +42,7 @@ function CompatibleModelRow({ modelId, fullModel, copied, onCopy, onDeleteAlias,
               {copied === `model-${modelId}` ? "Copied!" : "Copy"}
             </span>
           </div>
-          {onTest && (
+          {onTest && enabled && (
             <div className="relative group/btn">
               <button
                 onClick={onTest}
@@ -60,18 +60,26 @@ function CompatibleModelRow({ modelId, fullModel, copied, onCopy, onDeleteAlias,
           )}
         </div>
       </div>
-      <button
-        onClick={onDeleteAlias}
-        className="p-1 hover:bg-red-50 rounded text-red-500"
-        title="Remove model"
-      >
-        <span className="material-symbols-outlined text-sm">delete</span>
-      </button>
+      {onDeleteAlias && (
+        <button
+          onClick={onDeleteAlias}
+          className="p-1 hover:bg-red-50 rounded text-red-500"
+          title="Remove model"
+        >
+          <span className="material-symbols-outlined text-sm">delete</span>
+        </button>
+      )}
+      <Toggle
+        size="sm"
+        checked={enabled}
+        onChange={onToggle}
+        title={enabled ? "Disable this model" : "Enable this model"}
+      />
     </div>
   );
 }
 
-export default function CompatibleModelsSection({ providerStorageAlias, providerDisplayAlias, modelAliases, customModels, copied, onCopy, onDeleteAlias, onAddCustomModel, onDeleteCustomModel, connections, isAnthropic }) {
+export default function CompatibleModelsSection({ providerStorageAlias, providerDisplayAlias, modelAliases, customModels, copied, onCopy, onDeleteAlias, onAddCustomModel, onDeleteCustomModel, connections, isAnthropic, syncedModels = [], disabledModelIds, onToggleModel }) {
   const [newModel, setNewModel] = useState("");
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -102,6 +110,14 @@ export default function CompatibleModelsSection({ providerStorageAlias, provider
     providerAlias: providerStorageAlias,
     type: "llm",
   });
+  const addedIds = new Set(allModels.map((model) => model.id));
+  const rows = [
+    ...allModels,
+    // Found by the provider sync: can be switched off, not removed
+    ...syncedModels
+      .filter((model) => !addedIds.has(model.id))
+      .map((model) => ({ id: model.id, source: "sync" })),
+  ];
 
   const handleAdd = async () => {
     if (!newModel.trim() || adding) return;
@@ -193,16 +209,18 @@ export default function CompatibleModelsSection({ providerStorageAlias, provider
         </p>
       )}
 
-      {allModels.length > 0 && (
+      {rows.length > 0 && (
         <div className="flex flex-col gap-3">
-          {allModels.map(({ id, alias, source }) => (
+          {rows.map(({ id, alias, source }) => (
             <CompatibleModelRow
               key={`${source}-${providerStorageAlias}/${id}`}
               modelId={id}
               fullModel={`${providerDisplayAlias}/${id}`}
               copied={copied}
               onCopy={onCopy}
-              onDeleteAlias={() => source === "custom" ? onDeleteCustomModel(id) : onDeleteAlias(alias)}
+              onDeleteAlias={source === "sync" ? undefined : () => source === "custom" ? onDeleteCustomModel(id) : onDeleteAlias(alias)}
+              enabled={!disabledModelIds.includes(id)}
+              onToggle={(next) => onToggleModel(id, next)}
               onTest={connections.length > 0 ? () => handleTestModel(id) : undefined}
               testStatus={modelTestResults[id]}
               isTesting={testingModelId === id}
@@ -229,4 +247,7 @@ CompatibleModelsSection.propTypes = {
     isActive: PropTypes.bool,
   })).isRequired,
   isAnthropic: PropTypes.bool,
+  syncedModels: PropTypes.arrayOf(PropTypes.shape({ id: PropTypes.string })),
+  disabledModelIds: PropTypes.arrayOf(PropTypes.string).isRequired,
+  onToggleModel: PropTypes.func.isRequired,
 };

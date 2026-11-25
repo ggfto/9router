@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Card, Button, Toggle, Input } from "@/shared/components";
 import Modal, { ConfirmModal } from "@/shared/components/Modal";
+import ModelSyncCard from "./ModelSyncCard";
 import LanguageSwitcher from "@/shared/components/LanguageSwitcher";
 import { useTheme } from "@/shared/hooks/useTheme";
 import { cn } from "@/shared/utils/cn";
@@ -1597,6 +1598,8 @@ export default function ProfilePage() {
             )}
           </div>
         </Card>
+
+        <ModelSyncCard />
 
         {/* Observability Settings */}
         <Card>

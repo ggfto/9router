@@ -7,7 +7,7 @@ import {
 } from "../services/auth.js";
 import { getSettings } from "@/lib/localDb";
 import { getModelInfo } from "../services/model.js";
-import { isModelDisabled } from "../services/disabledModels.js";
+import { getDisabledReason } from "../services/disabledModels.js";
 import { getKeyAccessContext, enforceKeyAccessResolved } from "../services/keyAccess.js";
 import { handleEmbeddingsCore } from "open-sse/handlers/embeddingsCore.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
@@ -85,9 +85,10 @@ export async function handleEmbeddings(request) {
 
   const { provider, model } = modelInfo;
 
-  if (await isModelDisabled(provider, model)) {
-    log.warn("EMBEDDINGS", `Model "${modelStr}" is disabled`, { provider, model });
-    return errorResponse(HTTP_STATUS.FORBIDDEN, `Model "${modelStr}" is disabled`);
+  const disabledReason = await getDisabledReason(provider, model, modelStr);
+  if (disabledReason) {
+    log.warn("EMBEDDINGS", disabledReason, { provider, model });
+    return errorResponse(HTTP_STATUS.FORBIDDEN, disabledReason);
   }
   // Per-key access control: checked before any credential lookup.
   const keyAccessDenied = await enforceKeyAccessResolved(await getKeyAccessContext(request), modelStr, provider, model);

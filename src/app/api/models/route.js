@@ -1,18 +1,23 @@
 import { NextResponse } from "next/server";
 import { getModelAliases, setModelAlias, getCustomModels } from "@/models";
 import { getDisabledModels } from "@/lib/disabledModelsDb";
+import { getDisabledProviderSet } from "@/sse/services/disabledModels.js";
 import { AI_MODELS } from "@/shared/constants/config";
 import { getProviderAlias, ALIAS_TO_ID } from "@/shared/constants/providers";
 import { getCapabilitiesForModel } from "open-sse/providers/capabilities.js";
+import { getThinkingLevels } from "open-sse/providers/thinkingLevels.js";
 
 // GET /api/models - Get models with aliases
 export async function GET() {
   try {
     const modelAliases = await getModelAliases();
     const disabled = await getDisabledModels();
+    const disabledProviders = await getDisabledProviderSet();
+    const isProviderOff = (aliasOrId) => disabledProviders.has(ALIAS_TO_ID[aliasOrId] || aliasOrId);
 
     const models = AI_MODELS
       .filter((m) => {
+        if (isProviderOff(m.provider)) return false;
         const alias = getProviderAlias(m.provider) || m.provider;
         const list = disabled[alias] || disabled[m.provider] || [];
         return !list.includes(m.model);
@@ -22,11 +27,15 @@ export async function GET() {
         const providerAlias = getProviderAlias(m.provider) || m.provider;
         const routedModel = `${providerAlias}/${m.model}`;
         const c = getCapabilitiesForModel(m.provider, m.model);
+        const thinkingLevels = getThinkingLevels(m.provider, m.model);
         return {
           ...m,
           fullModel,
           routedModel,
           alias: modelAliases[fullModel] || m.model,
+          // Same per-model set /v1/models already publishes, so CLI-tool cards can
+          // seed thinking levels instead of guessing them (Pi, opencode).
+          ...(Array.isArray(thinkingLevels) && thinkingLevels.length > 0 ? { thinking_levels: thinkingLevels } : {}),
           caps: {
             vision: c.vision,
             search: c.search,
@@ -50,6 +59,7 @@ export async function GET() {
     const seenRouted = new Set(models.map((m) => m.routedModel));
     const customModels = (await getCustomModels()).filter((m) => {
       if (!m?.id || (m.kind || m.type || "llm") !== "llm") return false;
+      if (isProviderOff(m.providerAlias)) return false;
       if (seenRouted.has(`${m.providerAlias}/${m.id}`)) return false;
       return !seenFull.has(`${m.providerAlias}/${m.id}`);
     });
@@ -57,6 +67,7 @@ export async function GET() {
       const fullModel = `${m.providerAlias}/${m.id}`;
       const providerId = ALIAS_TO_ID[m.providerAlias] || m.providerAlias;
       const c = getCapabilitiesForModel(providerId, m.id);
+      const thinkingLevels = getThinkingLevels(providerId, m.id);
       models.push({
         provider: m.providerAlias,
         model: m.id,
@@ -64,6 +75,7 @@ export async function GET() {
         fullModel,
         routedModel: fullModel,
         alias: modelAliases[fullModel] || m.id,
+        ...(Array.isArray(thinkingLevels) && thinkingLevels.length > 0 ? { thinking_levels: thinkingLevels } : {}),
         caps: {
           vision: c.vision,
           search: c.search,

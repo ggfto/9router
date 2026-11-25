@@ -4,7 +4,7 @@ import {
 } from "../services/auth.js";
 import { getSettings, getCustomModels } from "@/lib/localDb";
 import { getModelInfo } from "../services/model.js";
-import { isModelDisabled } from "../services/disabledModels.js";
+import { getDisabledReason } from "../services/disabledModels.js";
 import { getKeyAccessContext, enforceKeyAccessResolved } from "../services/keyAccess.js";
 import { handleSttCore } from "open-sse/handlers/sttCore.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
@@ -66,9 +66,10 @@ export async function handleStt(request) {
   const { provider, model } = modelInfo;
   if (provider === "codex" && model !== "transcribe") return errorResponse(400, "Use model cx/transcribe for Codex STT");
 
-  if (await isModelDisabled(provider, model)) {
-    log.warn("STT", `Model "${modelStr}" is disabled`, { provider, model });
-    return errorResponse(HTTP_STATUS.FORBIDDEN, `Model "${modelStr}" is disabled`);
+  const disabledReason = await getDisabledReason(provider, model, modelStr);
+  if (disabledReason) {
+    log.warn("STT", disabledReason, { provider, model });
+    return errorResponse(HTTP_STATUS.FORBIDDEN, disabledReason);
   }
   // Per-key access control: checked before any credential lookup.
   const keyAccessDenied = await enforceKeyAccessResolved(await getKeyAccessContext(request), modelStr, provider, model);

@@ -5,10 +5,12 @@ import {
   extractApiKey,
   isValidApiKey,
 } from "../services/auth.js";
-import { getSettings } from "@/lib/localDb";
+import { getSettings, getCustomModels } from "@/lib/localDb";
 import { getModelInfo } from "../services/model.js";
+import { getDisabledReason } from "../services/disabledModels.js";
 import { getKeyAccessContext, enforceKeyAccessResolved } from "../services/keyAccess.js";
-import { handleSystemoneCore } from "open-sse/handlers/systemoneCore.js";
+import { handleSystemoneCore, validateSystemonePayload } from "open-sse/handlers/systemoneCore.js";
+import REGISTRY from "open-sse/providers/registry/index.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import * as log from "../utils/logger.js";
@@ -64,9 +66,6 @@ export async function handleSystemone(request) {
   if (body.state === undefined || body.state === null) {
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing required field: state");
   }
-  if (!body.questions || typeof body.questions !== "object" || Array.isArray(body.questions)) {
-    return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing required field: questions");
-  }
 
   const modelInfo = await getModelInfo(modelStr);
   if (!modelInfo.provider) {
@@ -76,9 +75,35 @@ export async function handleSystemone(request) {
 
   const { provider, model } = modelInfo;
 
+  // Resolve optional custom-model upstreamModelId (e.g. Cloudflare decision models registered via /api/models/custom).
+  let customUpstreamModelId = null;
+  try {
+    const entry = REGISTRY.find((r) => r.id === provider || r.alias === provider);
+    const acceptedAliases = new Set([provider, entry?.id, entry?.alias, entry?.uiAlias, ...(entry?.aliases || [])].filter(Boolean));
+    const customModels = await getCustomModels();
+    const hit = customModels.find(
+      (c) => c && c.type === "systemone" && acceptedAliases.has(c.providerAlias) && c.id === model
+        && typeof c.upstreamModelId === "string" && c.upstreamModelId.trim()
+    );
+    if (hit) customUpstreamModelId = hit.upstreamModelId.trim();
+  } catch {
+    // DB unreadable: fall back to static registry metadata
+  }
+
+  const payloadError = validateSystemonePayload(body, provider, model);
+  if (payloadError) {
+    return errorResponse(HTTP_STATUS.BAD_REQUEST, payloadError);
+  }
+
   // Per-key access control: checked before any credential lookup.
   const keyAccessDenied = await enforceKeyAccessResolved(await getKeyAccessContext(request), modelStr, provider, model);
   if (keyAccessDenied) return keyAccessDenied;
+
+  const disabledReason = await getDisabledReason(provider, model, modelStr);
+  if (disabledReason) {
+    log.warn("SYSTEMONE", disabledReason, { provider, model });
+    return errorResponse(HTTP_STATUS.FORBIDDEN, disabledReason);
+  }
 
   if (modelStr !== `${provider}/${model}`) {
     log.info("ROUTING", `${modelStr} → ${provider}/${model}`);
@@ -116,7 +141,7 @@ export async function handleSystemone(request) {
 
     const result = await handleSystemoneCore({
       body,
-      modelInfo: { provider, model },
+      modelInfo: { provider, model, ...(customUpstreamModelId ? { upstreamModelId: customUpstreamModelId } : {}) },
       credentials: refreshedCredentials,
       log,
       onRequestSuccess: async () => {

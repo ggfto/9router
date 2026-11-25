@@ -4,7 +4,7 @@ import {
 } from "../services/auth.js";
 import { getSettings } from "@/lib/localDb";
 import { getModelInfo, getComboModels } from "../services/model.js";
-import { isModelDisabled, filterDisabledModels } from "../services/disabledModels.js";
+import { getDisabledReason, filterDisabledModels } from "../services/disabledModels.js";
 import { getKeyAccessContext, enforceKeyAccess } from "../services/keyAccess.js";
 import { handleTtsCore } from "open-sse/handlers/ttsCore.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
@@ -83,9 +83,10 @@ async function handleSingleModelTts(body, modelStr, responseFormat, language, st
 
   const { provider, model } = modelInfo;
 
-  if (await isModelDisabled(provider, model)) {
-    log.warn("TTS", `Model "${modelStr}" is disabled`, { provider, model });
-    return errorResponse(HTTP_STATUS.FORBIDDEN, `Model "${modelStr}" is disabled`);
+  const disabledReason = await getDisabledReason(provider, model, modelStr);
+  if (disabledReason) {
+    log.warn("TTS", disabledReason, { provider, model });
+    return errorResponse(HTTP_STATUS.FORBIDDEN, disabledReason);
   }
   log.info("ROUTING", `Provider: ${provider}, Voice: ${model}`);
 
@@ -123,7 +124,7 @@ async function handleSingleModelTts(body, modelStr, responseFormat, language, st
 
     log.info("AUTH", `\x1b[32mUsing ${provider} account: ${credentials.connectionName}\x1b[0m`);
 
-    const result = await handleTtsCore({ provider, model, input: body.input, credentials, responseFormat, language, style, log });
+    const result = await handleTtsCore({ provider, model, input: body.input, credentials, responseFormat, language, style, options: body, log });
 
     if (result.success) return result.response;
 

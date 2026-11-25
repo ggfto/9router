@@ -14,6 +14,7 @@ import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { handleComboChat, getComboModelsFromData } from "open-sse/services/combo.js";
 import { getKeyAccessContext, enforceKeyAccessProvider } from "../services/keyAccess.js";
+import { getDisabledReason, filterDisabledProviders } from "../services/disabledModels.js";
 import { assertPublicUrlResolved } from "@/shared/utils/ssrfGuard.js";
 
 /**
@@ -98,13 +99,17 @@ export async function handleFetch(request) {
   const keyAccessDenied = await enforceKeyAccessProvider(await getKeyAccessContext(request), providerInput, comboModels);
   if (keyAccessDenied) return keyAccessDenied;
   if (comboModels) {
+    const enabledProviders = await filterDisabledProviders(comboModels);
+    if (enabledProviders.length === 0) {
+      return errorResponse(HTTP_STATUS.BAD_REQUEST, `All providers in combo "${providerInput}" are disabled`);
+    }
     const comboStrategies = settings.comboStrategies || {};
     const comboStrategy = comboStrategies[providerInput]?.fallbackStrategy || settings.comboStrategy || "fallback";
     const comboStickyLimit = settings.comboStickyRoundRobinLimit;
     log.info("FETCH", `Combo "${providerInput}" with ${comboModels.length} providers (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
     return handleComboChat({
       body,
-      models: comboModels,
+      models: enabledProviders,
       handleSingleModel: (b, m) => handleSingleProviderFetch(b, m, request, apiKey, settings),
       log,
       comboName: providerInput,
@@ -132,6 +137,12 @@ async function handleSingleProviderFetch(body, providerInput, request, apiKey, s
   if (!providerConfig) {
     log.warn("FETCH", "Provider does not support web fetch", { provider: providerId });
     return errorResponse(HTTP_STATUS.BAD_REQUEST, `Provider ${providerId} does not support web fetch`);
+  }
+
+  const disabledReason = await getDisabledReason(providerId);
+  if (disabledReason) {
+    log.warn("FETCH", disabledReason, { provider: providerId });
+    return errorResponse(HTTP_STATUS.FORBIDDEN, disabledReason);
   }
 
   if (providerInput !== providerId) {

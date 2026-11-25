@@ -61,12 +61,17 @@ const DEFAULT_SETTINGS = {
   // User-authored system prompt, injected independently of the built-in savers.
   customPromptEnabled: false,
   customPrompt: "",
+  // REA allow: replace built-in security-policy paragraphs with REA guidance.
+  reaAllowEnabled: false,
   pxpipeEnabled: false,
   pxpipeAutoInstall: true,
   pxpipeMinChars: 25000,
   pxpipeTimeoutMs: 15000,
   // Per-provider user header overrides applied at dispatch: { [providerId]: { headers: {..} } }
   providerOverrides: {},
+  // Periodic refresh of each enabled provider's model list (5-field cron, server time)
+  modelSyncEnabled: false,
+  modelSyncCron: "0 */6 * * *",
 };
 
 async function readRaw() {

@@ -9,6 +9,8 @@ import {
 } from "@/shared/constants/providers";
 import { getProviderConnections, getCombos, getCustomModels, getModelAliases } from "@/lib/localDb";
 import { getDisabledModels } from "@/lib/disabledModelsDb";
+import { getDisabledProviders } from "@/lib/disabledProvidersDb";
+import { getSyncedModels } from "@/lib/syncedModelsDb";
 import { getKeyAccessContext, filterModelsListForKey } from "@/sse/services/keyAccess.js";
 import { resolveKiroModels } from "open-sse/services/kiroModels.js";
 import { resolveKimchiModels } from "open-sse/services/kimchiModels.js";
@@ -18,9 +20,11 @@ import { resolveClinepassModels, resolveClineModels } from "open-sse/services/cl
 import { resolveGrokCliModels } from "open-sse/services/grokCliModels.js";
 import { resolveCursorModels } from "open-sse/services/cursorModels.js";
 import { resolveZedModels } from "open-sse/shared/zedAuth.js";
+import { resolveCommandCodeModels } from "open-sse/services/commandcodeModels.js";
 import { updateProviderCredentials } from "@/sse/services/tokenRefresh";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { capabilitiesFromServiceKind, getCapabilitiesForModel, aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
+import { getThinkingLevels } from "open-sse/providers/thinkingLevels.js";
 
 // Qoder shares one live resolver across intl (qoder) and CN (qoder-cn); the
 // credentials carry the provider id so qoderModels picks the right region's
@@ -56,13 +60,49 @@ function comboSeatCapabilities(seat) {
   const slash = seat.indexOf("/");
   if (slash <= 0) return null;
   const alias = seat.slice(0, slash);
-  return getCapabilitiesForModel(ALIAS_TO_PROVIDER_ID[alias] || alias, seat.slice(slash + 1));
+  // Strip a trailing thinking-level override like "(max)" or "(high)" before the
+  // capability lookup — it is not part of the model id. Otherwise the lookup
+  // misses the provider-scoped catalog entry and falls through to a default.
+  const model = seat.slice(slash + 1).replace(/\([^()]+\)\s*$/, "").trim();
+  return getCapabilitiesForModel(ALIAS_TO_PROVIDER_ID[alias] || alias, model);
 }
 
 // Per-provider live model resolvers. Each receives a connection record and
 // returns { models: [{ id, name? }, ...] } | null on failure.
 // Adding a provider here makes /v1/models prefer the live catalog for it.
 const LIVE_MODEL_RESOLVERS = {
+  opencode: async (conn) => {
+    try {
+      const res = await fetch("https://opencode.ai/zen/v1/models", {
+        headers: { "x-opencode-client": "desktop" },
+        cache: "no-store",
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const raw = Array.isArray(data?.models) ? data.models : Array.isArray(data?.data) ? data.data : [];
+      const KNOWN_FREE = new Set(["big-pickle"]);
+      const DEAD = new Set(["deepseek-v4-flash-free"]);
+      const models = raw
+        .filter((m) => {
+          const id = m?.id || m?.name;
+          if (typeof id !== "string") return false;
+          return id.endsWith("-free") || KNOWN_FREE.has(id);
+        })
+        .filter((m) => !DEAD.has(m?.id || m?.name))
+        .map((m) => {
+          const id = m.id || m.name;
+          const caps = {};
+          if (m.limit?.context) caps.contextWindow = m.limit.context;
+          if (m.limit?.output) caps.maxOutput = m.limit.output;
+          if (m.capabilities?.reasoning?.supported) caps.reasoning = true;
+          if (m.capabilities?.tools?.supported) caps.tools = true;
+          return { id, name: m.name || id, capabilities: Object.keys(caps).length ? caps : undefined };
+        });
+      return models.length ? { models } : null;
+    } catch {
+      return null;
+    }
+  },
   kiro: async (conn) => {
     const result = await resolveKiroModels({
       accessToken: conn.accessToken,
@@ -157,6 +197,13 @@ const LIVE_MODEL_RESOLVERS = {
           capabilities: m.supportsTools ? { tools: true } : undefined,
         })),
     };
+  },
+  // CommandCode's catalog is public and account-independent, so no per-connection
+  // credentials are needed — the connection only has to exist and be active.
+  commandcode: async () => {
+    const result = await resolveCommandCodeModels();
+    if (!result?.models?.length) return null;
+    return { models: result.models.map(({ id, name }) => ({ id, name })) };
   },
 };
 
@@ -323,10 +370,29 @@ export async function buildModelsList(kindFilter, options = {}) {
   // 9router instance's fetchCompatibleModelIds — skip dynamic fetch to break
   // cross-instance recursive loops.
   const skipDynamicFetch = options.skipDynamicFetch === true;
+  let disabledProviders = new Set();
+  try {
+    disabledProviders = new Set(await getDisabledProviders());
+  } catch (e) {
+    console.log("Could not fetch disabled providers");
+  }
+  const isProviderOff = (aliasOrId) => disabledProviders.has(ALIAS_TO_PROVIDER_ID[aliasOrId] || aliasOrId);
+
+  let syncedByProvider = {};
+  try {
+    syncedByProvider = await getSyncedModels();
+  } catch (e) {
+    console.log("Could not fetch synced models");
+  }
+
   let connections = [];
+  // The static catalog is only a fallback for "nothing configured at all":
+  // switching every provider off must not expose every model.
+  let hasStoredConnections = false;
   try {
     connections = await getProviderConnections();
-    connections = connections.filter(c => c.isActive !== false);
+    hasStoredConnections = connections.length > 0;
+    connections = connections.filter(c => c.isActive !== false && !disabledProviders.has(c.provider));
   } catch (e) {
     console.log("Could not fetch providers, returning all models");
   }
@@ -369,7 +435,7 @@ export async function buildModelsList(kindFilter, options = {}) {
 
   // Include no-auth free providers (e.g. opencode) so their models are exposed in /v1/models
   for (const [id, provider] of Object.entries(FREE_PROVIDERS || {})) {
-    if (provider?.noAuth && !activeConnectionByProvider.has(id)) {
+    if (provider?.noAuth && !disabledProviders.has(id) && !activeConnectionByProvider.has(id)) {
       activeConnectionByProvider.set(id, {
         id: "noauth",
         provider: id,
@@ -410,11 +476,11 @@ export async function buildModelsList(kindFilter, options = {}) {
     models.push(entry);
   }
 
-  if (connections.length === 0) {
+  if (!hasStoredConnections) {
     // DB unavailable -> return static models, filtered by per-model kind
     for (const [alias, providerModels] of Object.entries(PROVIDER_MODELS)) {
       const providerId = ALIAS_TO_PROVIDER_ID[alias] || alias;
-      if (!providerMatchesKinds(providerId, kindFilter)) continue;
+      if (isProviderOff(providerId) || !providerMatchesKinds(providerId, kindFilter)) continue;
       for (const model of providerModels) {
         if (!kindFilter.includes(modelKind(model))) continue;
         if (isDisabled(alias, model.id) || isDisabled(providerId, model.id)) continue;
@@ -432,7 +498,7 @@ export async function buildModelsList(kindFilter, options = {}) {
       // Custom models without active connection are LLM-only by current schema
       if (!kindFilter.includes(LLM_KIND)) continue;
       const providerAlias = customModel.providerAlias;
-      if (!providerAlias) continue;
+      if (!providerAlias || isProviderOff(providerAlias)) continue;
 
       const modelId = String(customModel.id).trim();
       if (!modelId) continue;
@@ -466,6 +532,9 @@ export async function buildModelsList(kindFilter, options = {}) {
       );
       let liveModelKindById = new Map();
       let liveCapabilitiesById = new Map();
+      const syncedModels = syncedByProvider[providerId]?.models || [];
+      const syncedKindById = new Map(syncedModels.map((m) => [m.id, m.kind]));
+      let hasLiveCatalog = false;
 
       let rawModelIds = hasExplicitEnabledModels
         ? Array.from(
@@ -477,7 +546,7 @@ export async function buildModelsList(kindFilter, options = {}) {
           )
         : providerModels.map((model) => model.id);
 
-      if (isCompatibleProvider && rawModelIds.length === 0 && !skipDynamicFetch) {
+      if (isCompatibleProvider && rawModelIds.length === 0 && syncedModels.length === 0 && !skipDynamicFetch) {
         rawModelIds = await fetchCompatibleModelIds(conn);
       }
 
@@ -490,6 +559,7 @@ export async function buildModelsList(kindFilter, options = {}) {
           const live = await liveResolver(conn);
           if (live?.models?.length) {
             rawModelIds = live.models.map((m) => m.id);
+            hasLiveCatalog = true;
             liveModelKindById = new Map(
               live.models
                 .filter((m) => m?.id)
@@ -504,6 +574,12 @@ export async function buildModelsList(kindFilter, options = {}) {
         } catch (err) {
           console.log(`Live model fetch failed for ${providerId}: ${err?.message || err}`);
         }
+      }
+
+      // Models found by the provider sync add to the static list. A live catalog
+      // is fresher than the cache, and an explicit selection wins over both.
+      if (!hasLiveCatalog && !hasExplicitEnabledModels) {
+        rawModelIds = Array.from(new Set([...rawModelIds, ...syncedKindById.keys()]));
       }
 
       const modelIds = rawModelIds
@@ -568,7 +644,7 @@ export async function buildModelsList(kindFilter, options = {}) {
         // Resolve kind: prefer custom/live metadata, then static, then ID heuristics.
         const customKind = customModelKindById.get(modelId);
         const liveKind = liveModelKindById.get(modelId);
-        const kind = customKind || liveKind || staticModelKindById.get(modelId) || inferKindFromUnknownModelId(modelId);
+        const kind = customKind || liveKind || staticModelKindById.get(modelId) || syncedKindById.get(modelId) || inferKindFromUnknownModelId(modelId);
         // imageToText custom models stay in the LLM list (vision-capable chat models)
         const allowAsLlm = kind === "imageToText" && kindFilter.includes(LLM_KIND);
         if (!kindFilter.includes(kind) && !allowAsLlm) continue;
@@ -607,6 +683,11 @@ export async function buildModelsList(kindFilter, options = {}) {
           }
           if (Number.isFinite(contextWindow)) model.context_length = contextWindow;
           if (Number.isFinite(maxOutput)) model.max_completion_tokens = maxOutput;
+          // Selectable reasoning levels (the set the dashboard picker shows) so clients
+          // can build their effort selector from the gateway instead of keeping a
+          // per-model table. Omitted when the model has no reasoning.
+          const thinkingLevels = getThinkingLevels(providerId, modelId);
+          if (Array.isArray(thinkingLevels) && thinkingLevels.length > 0) model.thinking_levels = thinkingLevels;
         }
         models.push(model);
       }

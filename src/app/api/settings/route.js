@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSettings, updateSettings } from "@/lib/localDb";
 import { applyOutboundProxyEnv } from "@/lib/network/outboundProxy";
 import { resetComboRotation } from "open-sse/services/combo.js";
+import { getCronError } from "@/lib/modelSync/cron.js";
 import bcrypt from "bcryptjs";
 
 export const dynamic = "force-dynamic";
@@ -41,6 +42,12 @@ export async function PATCH(request) {
 
     // Strip protected secrets before any internal handling sets them
     for (const key of PROTECTED_SETTING_KEYS) delete body[key];
+
+    if (Object.prototype.hasOwnProperty.call(body, "modelSyncCron")) {
+      const cronError = getCronError(body.modelSyncCron);
+      if (cronError) return NextResponse.json({ error: cronError }, { status: 400 });
+      body.modelSyncCron = body.modelSyncCron.trim();
+    }
 
     // If updating password, hash it
     if (body.newPassword) {
@@ -106,6 +113,14 @@ export async function PATCH(request) {
           configureQuotaAutoPing(settings);
         })
         .catch((error) => console.warn("[AutoPing] settings update failed:", error.message));
+    }
+
+    if (
+      Object.prototype.hasOwnProperty.call(body, "modelSyncEnabled") ||
+      Object.prototype.hasOwnProperty.call(body, "modelSyncCron")
+    ) {
+      const { configureModelSync } = await import("@/lib/modelSync/scheduler.js");
+      await configureModelSync();
     }
 
     const { password, oidcClientSecret, ...safeSettings } = settings;

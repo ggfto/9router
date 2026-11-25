@@ -6,6 +6,7 @@ import {
   markAccountUnavailable,
 } from "@/sse/services/auth.js";
 import { getSettings } from "@/lib/localDb";
+import { getDisabledReason } from "@/sse/services/disabledModels.js";
 import { PROVIDER_MODELS } from "@/shared/constants/models";
 import { GEMINI_NATIVE_TTS_FETCH_TIMEOUT_MS } from "open-sse/config/runtimeConfig.js";
 import { initTranslators } from "open-sse/translator/index.js";
@@ -249,6 +250,10 @@ async function forwardGeminiNativeRequest(request, body, model, action) {
   // so restricted keys are checked here, before any credential lookup.
   const keyAccessDenied = await enforceKeyAccessResolved(await getKeyAccessContext(request), model, "gemini", modelId);
   if (keyAccessDenied) return keyAccessDenied;
+  const disabledReason = await getDisabledReason("gemini", modelId, model);
+  if (disabledReason) {
+    return Response.json({ error: { message: disabledReason } }, { status: 403 });
+  }
   const excludeConnectionIds = new Set();
   const bodyText = JSON.stringify(body);
   let lastError = null;

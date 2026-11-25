@@ -1,4 +1,6 @@
 import { PROVIDER_MODELS } from "@/shared/constants/models";
+import { resolveProviderId } from "@/shared/constants/providers";
+import { getDisabledModelMap, getDisabledProviderSet, isDisabledInMap } from "@/sse/services/disabledModels.js";
 
 /**
  * Handle CORS preflight
@@ -35,8 +37,14 @@ export async function GET() {
       });
     }
     
+    const disabledMap = await getDisabledModelMap();
+    const disabledProviders = await getDisabledProviderSet();
+
     for (const [provider, providerModels] of Object.entries(PROVIDER_MODELS)) {
+      const providerId = resolveProviderId(provider);
+      if (disabledProviders.has(providerId)) continue;
       for (const model of providerModels) {
+        if (isDisabledInMap(disabledMap, providerId, model.id)) continue;
         addModel({
           name: `models/${provider}/${model.id}`,
           displayName: model.name || model.id,

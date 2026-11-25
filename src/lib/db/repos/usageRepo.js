@@ -1,4 +1,5 @@
 import { EventEmitter } from "events";
+import { createHash } from "node:crypto";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 import { getMeta, setMeta } from "../helpers/metaStore.js";
@@ -9,6 +10,18 @@ function maskApiKey(key) {
   if (trimmed.length <= 12) return trimmed.charAt(0) + "***";
   // Keep the tail: keys sharing a machine-id prefix (team keys) must not collide.
   return trimmed.slice(0, 8) + "***" + trimmed.slice(-4);
+}
+
+// byApiKey is grouped by "<full key>|model|provider" internally. Those names are
+// serialized by /api/usage/*, so the key is swapped for its mask plus a short
+// digest (the digest keeps keys with the same mask in separate buckets).
+function toPublicApiKeyBuckets(byApiKey) {
+  return Object.fromEntries(Object.entries(byApiKey).map(([name, value]) => {
+    const [apiKey, ...rest] = name.split("|");
+    if (apiKey === "local-no-key") return [name, value];
+    const digest = createHash("sha256").update(apiKey).digest("hex").slice(0, 12);
+    return [[`${maskApiKey(apiKey)}#${digest}`, ...rest].join("|"), value];
+  }));
 }
 
 const PENDING_TIMEOUT_MS = 60 * 1000;
@@ -669,6 +682,7 @@ export async function getUsageStats(period = "all") {
   }
 
   stats.totalRequests = Object.values(stats.byProvider).reduce((sum, p) => sum + (p.requests || 0), 0);
+  stats.byApiKey = toPublicApiKeyBuckets(stats.byApiKey);
   return stats;
 }
 

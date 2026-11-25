@@ -31,7 +31,7 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
-  if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+  if (tempDir) try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch { /* Windows keeps the SQLite file open */ }
   if (originalDataDir === undefined) delete process.env.DATA_DIR;
   else process.env.DATA_DIR = originalDataDir;
 });
@@ -146,7 +146,7 @@ describe("backupDbLite — excludes requestDetails, keeps critical data", () => 
       expect(st.c).toBeGreaterThanOrEqual(1);
     } finally {
       bak.close();
-      fs.rmSync(backupDir, { recursive: true, force: true });
+      try { fs.rmSync(backupDir, { recursive: true, force: true }); } catch { /* Windows keeps the SQLite file open */ }
     }
   });
 });

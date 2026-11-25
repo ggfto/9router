@@ -48,7 +48,7 @@ describe("compressWithHeadroom openai-responses format (#1998)", () => {
     expect(typeof body.input[0].content).not.toBe("string");
   });
 
-  it("skips Responses tool/reasoning history instead of collapsing it into a message (#2132)", async () => {
+  it("sends only tool output text and never collapses Responses history into a message (#2132)", async () => {
     global.fetch = vi.fn(async () => ({
       ok: true,
       json: async () => ({
@@ -99,9 +99,13 @@ describe("compressWithHeadroom openai-responses format (#1998)", () => {
       diagnostics,
     });
 
+    // Only the tool output text goes to the proxy; the mocked reply does not
+    // match it, so nothing is applied and the history stays untouched.
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body).messages).toEqual([
+      { role: "tool", tool_call_id: "headroom-tool-0", content: "ok" },
+    ]);
     expect(data).toBeNull();
-    expect(global.fetch).not.toHaveBeenCalled();
     expect(body.input).toEqual(input);
-    expect(diagnostics.reason).toBe("skipped: openai-responses tool/reasoning input is not safe to compress");
   });
 });
