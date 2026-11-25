@@ -8,6 +8,17 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+// The fork sends upstream traffic through proxyAwareFetch (connection proxy),
+// which does not use a stubbed global fetch. Delegate to the global at call
+// time so the stub below intercepts it and no real request leaves the test.
+vi.mock("../../open-sse/utils/proxyFetch.js", async (importOriginal) => ({
+  ...(await importOriginal()),
+  proxyAwareFetch: (url, options) => globalThis.fetch(url, options),
+}));
+// Load it now: importing proxyFetch patches the global fetch, which must happen
+// before a test installs its stub.
+import "../../open-sse/utils/proxyFetch.js";
+
 const originalFetch = global.fetch;
 
 function mockFetchOnce(payload, { ok = true, status = 200 } = {}) {

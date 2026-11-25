@@ -23,18 +23,28 @@ const SPECIALIZED = new Set([
   "xiaomi-tokenplan", "mimo-free",
 ]);
 
-// Per-process / per-request values: kimi's random device name, minimax's session UUID.
-const VOLATILE_HEADERS = new Set(["x-msh-device-name", "x-mavis-session-id"]);
+// Per-process / per-request values (kimi's random device name, minimax's session
+// UUID) and values that follow the machine running the test (OS, Node, timezone).
+const VOLATILE_HEADERS = new Set([
+  "x-msh-device-name", "x-mavis-session-id",
+  "x-platform", "x-platform-version", "x-msh-device-model", "x-mavis-timezone-offset",
+]);
+// Headers that carry the app version, which changes on every release.
+const APP_VERSION_HEADERS = new Set(["x-client-version", "x-core-version", "x-msh-version"]);
 
 // Sanitize headers: strip tokens + dynamic time fields (kimi X-Msh-Device-Id) so snapshots stay stable.
 function sanitize(headers) {
   const out = {};
   for (const [k, v] of Object.entries(headers)) {
     if (VOLATILE_HEADERS.has(k.toLowerCase())) { out[k] = "<VOLATILE>"; continue; }
+    if (APP_VERSION_HEADERS.has(k.toLowerCase())) { out[k] = "<APP_VERSION>"; continue; }
     out[k] = typeof v === "string"
       ? v.replace(/Bearer .+/, "Bearer <TOK>")
           .replace(/sk-test-APIKEY|tok-test-ACCESS/g, "<CRED>")
+          // Per-request ids (codebuddy conversation/request headers)
+          .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<UUID>")
           .replace(/kimi-\d{10,}/g, "kimi-<TS>")
+          .replace(/9Router\/\d+\.\d+\.\d+/g, "9Router/<APP_VERSION>")
       : v;
   }
   return out;

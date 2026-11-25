@@ -18,7 +18,7 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
-  if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+  if (tempDir) try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch { /* Windows keeps the SQLite file open */ }
   if (originalDataDir === undefined) delete process.env.DATA_DIR;
   else process.env.DATA_DIR = originalDataDir;
 });

@@ -1,6 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-describe("xai/oauth service", () => {
+// The fork sends upstream traffic through proxyAwareFetch (connection proxy),
+// which does not use a stubbed global fetch. Delegate to the global at call
+// time so the stub below intercepts it and no real request leaves the test.
+vi.mock("../../open-sse/utils/proxyFetch.js", async (importOriginal) => ({
+  ...(await importOriginal()),
+  proxyAwareFetch: (url, options) => globalThis.fetch(url, options),
+}));
+// Load it now: importing proxyFetch patches the global fetch, which must happen
+// before a test installs its stub.
+import "../../open-sse/utils/proxyFetch.js";
+
+// The first test pays for importing the OAuth service graph, which can exceed the
+// 5s default under full-suite load and cascade into the next test's mocks.
+describe("xai/oauth service", { timeout: 30_000 }, () => {
   beforeEach(() => {
     vi.resetModules();
     vi.restoreAllMocks();

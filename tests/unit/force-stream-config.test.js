@@ -45,6 +45,8 @@ vi.mock("../../open-sse/services/tokenRefresh.js", () => ({
 vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
   default: vi.fn(),
   proxyAwareFetch: vi.fn(),
+  // Fork export: runs the call inside the connection's proxy context
+  runWithProxyOptions: (_proxyOptions, fn) => fn(),
 }));
 
 vi.mock("../../open-sse/translator/formats/claude.js", () => ({

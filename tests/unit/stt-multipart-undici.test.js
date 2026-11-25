@@ -1,4 +1,12 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+
+// The fork sends upstream traffic through proxyAwareFetch (connection proxy),
+// which does not use a stubbed global fetch. Delegate to the global at call
+// time so the stub below intercepts it and no real request leaves the test.
+vi.mock("../../open-sse/utils/proxyFetch.js", async (importOriginal) => ({
+  ...(await importOriginal()),
+  proxyAwareFetch: (url, options) => globalThis.fetch(url, options),
+}));
 import { handleSttCore } from "open-sse/handlers/sttCore.js";
 
 describe("STT multipart FormData", () => {

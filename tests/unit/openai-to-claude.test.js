@@ -266,7 +266,13 @@ describe("openaiToClaudeResponse", () => {
       }]
     };
 
-    const result = openaiToClaudeResponse(chunk, state);
+    openaiToClaudeResponse(chunk, state);
+    // Arguments are buffered and sanitized, then emitted when the call finishes.
+    const result = openaiToClaudeResponse({
+      id: "chatcmpl-test",
+      model: "gpt-test",
+      choices: [{ delta: {}, finish_reason: "tool_calls" }],
+    }, state);
     const inputDelta = result.find(event => event.delta?.type === "input_json_delta");
 
     expect(inputDelta).toBeDefined();

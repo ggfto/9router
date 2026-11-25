@@ -25,6 +25,10 @@ describe("Kiro external_idp (CLIProxyAPI) import and refresh", () => {
   });
 
   it("refreshes Microsoft external_idp tokens with form-encoded OAuth body", async () => {
+    // The fork refreshes through proxyAwareFetch; hand it to the stub below.
+    vi.doMock("../../open-sse/utils/proxyFetch.js", () => ({
+      proxyAwareFetch: (url, init) => globalThis.fetch(url, init),
+    }));
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({

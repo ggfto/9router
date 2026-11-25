@@ -41,7 +41,7 @@ describe("PUT /api/keys/[id] rename", () => {
     vi.doUnmock("next/server");
     if (originalDataDir === undefined) delete process.env.DATA_DIR;
     else process.env.DATA_DIR = originalDataDir;
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch { /* Windows keeps the SQLite file open */ }
   });
 
   it("renames the key and trims the name", async () => {
