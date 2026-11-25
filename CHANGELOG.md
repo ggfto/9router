@@ -1,6 +1,8 @@
 # Unreleased
 
 ## Fixes
+- **Security**: `/api/usage/*` no longer serializes raw API keys as `byApiKey`
+  property names (GHSA-vjc7); they are now the masked key plus a short digest.
 - **Proxy-Pools**: the pool now actually applies to the traffic it was bound to.
   `strictProxy` never reached the request path (`auth.js` dropped it when
   building `providerSpecificData`, `chatCore` never read it), so a strict pool
