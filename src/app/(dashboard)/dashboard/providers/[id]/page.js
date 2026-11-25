@@ -88,6 +88,8 @@ export default function ProviderDetailPage() {
   const [liveModelsError, setLiveModelsError] = useState(null);
   const [kiloFreeModels, setKiloFreeModels] = useState([]);
   const [disabledModelIds, setDisabledModelIds] = useState([]);
+  const [providerSwitchedOff, setProviderSwitchedOff] = useState(false);
+  const [syncedModels, setSyncedModels] = useState([]);
   const [confirmState, setConfirmState] = useState(null);
   const [showAgRiskModal, setShowAgRiskModal] = useState(false);
   const [oneByOneRunning, setOneByOneRunning] = useState(false);
@@ -172,6 +174,9 @@ export default function ProviderDetailPage() {
     ? liveModels
     : applyQoderModelNames(staticModels, customModels, getProviderAlias(providerId));
   const providerAlias = getProviderAlias(providerId);
+  // Off when the provider switch is off, or every account is individually off
+  const providerOff = providerSwitchedOff
+    || (connections.length > 0 && connections.every((c) => c.isActive === false));
   
   const isOpenAICompatible = isOpenAICompatibleProvider(providerId);
   const isAnthropicCompatible = isAnthropicCompatibleProvider(providerId);
@@ -247,6 +252,41 @@ export default function ProviderDetailPage() {
       if (res.ok) await fetchDisabledModels();
     } catch (error) {
       console.log("Error enabling model:", error);
+    }
+  };
+
+  const handleToggleModel = (modelId, enabled) => (
+    enabled ? handleEnableModel(modelId) : handleDisableModel(modelId)
+  );
+
+  const fetchProviderSwitch = useCallback(async () => {
+    try {
+      const [disabledRes, syncRes] = await Promise.all([
+        fetch("/api/providers/disabled", { cache: "no-store" }),
+        fetch("/api/models/sync", { cache: "no-store" }),
+      ]);
+      if (disabledRes.ok) setProviderSwitchedOff(((await disabledRes.json()).disabled || []).includes(providerId));
+      if (syncRes.ok) {
+        const entry = (await syncRes.json()).providers?.[providerId];
+        setSyncedModels((entry?.models || []).filter((m) => m.kind === "llm"));
+      }
+    } catch (error) {
+      console.log("Error fetching provider switch:", error);
+    }
+  }, [providerId]);
+
+  const handleToggleProvider = async (enabled) => {
+    try {
+      const res = await fetch("/api/providers/disabled", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ providerId, disabled: !enabled }),
+      });
+      if (!res.ok) return;
+      setProviderSwitchedOff(!enabled);
+      if ((await res.json()).reactivated > 0) await fetchConnections();
+    } catch (error) {
+      console.log("Error toggling provider:", error);
     }
   };
 
@@ -484,7 +524,8 @@ export default function ProviderDetailPage() {
     fetchAliases();
     fetchCustomModels();
     fetchDisabledModels();
-  }, [fetchConnections, fetchAliases, fetchCustomModels, fetchDisabledModels]);
+    fetchProviderSwitch();
+  }, [fetchConnections, fetchAliases, fetchCustomModels, fetchDisabledModels, fetchProviderSwitch]);
 
   // Live per-connection catalogs (cursor, zed): the static registry carries
   // no usable list, so resolve from the active connection. Fires only when
@@ -1203,6 +1244,9 @@ export default function ProviderDetailPage() {
           onDeleteCustomModel={(modelId) => handleDeleteCustomModel(modelId, "llm", providerStorageAlias)}
           connections={connections}
           isAnthropic={isAnthropicCompatible}
+          syncedModels={syncedModels}
+          disabledModelIds={disabledModelIds}
+          onToggleModel={handleToggleModel}
         />
       );
     }
@@ -1213,8 +1257,6 @@ export default function ProviderDetailPage() {
       ...kiloFreeModels.filter((fm) => !models.some((m) => m.id === fm.id)),
     ].filter((m) => { const k = getModelKind(m); return !k || k === "llm"; });
     const disabledSet = new Set(disabledModelIds);
-    const displayModels = allModels.filter((m) => !disabledSet.has(m.id));
-    const disabledDisplayModels = allModels.filter((m) => disabledSet.has(m.id));
     const customModelRows = getProviderCustomModelRows({
       customModels,
       modelAliases,
@@ -1222,6 +1264,13 @@ export default function ProviderDetailPage() {
       builtInModels: models,
       type: "llm",
     });
+
+    const listedIds = new Set([...allModels, ...customModelRows].map((m) => m.id));
+    const displayModels = [
+      ...allModels,
+      // Found by the provider sync and not in the built-in list
+      ...syncedModels.filter((m) => !listedIds.has(m.id)),
+    ];
 
     return (
       <div className="flex flex-wrap gap-3">
@@ -1247,6 +1296,8 @@ export default function ProviderDetailPage() {
             isTesting={testingModelIds.has(model.id)}
             isCustom
             isFree={false}
+            enabled={!disabledSet.has(model.id)}
+            onToggle={(next) => handleToggleModel(model.id, next)}
             caps={getCaps(`${providerId}/${model.id}`)}
             thinkingSuffix={resolveThinkingSuffix(model.id)}
           />
@@ -1272,7 +1323,8 @@ export default function ProviderDetailPage() {
               onTest={connections.length > 0 || isFreeNoAuth ? () => handleTestModel(model.id) : undefined}
               isTesting={testingModelIds.has(model.id)}
               isFree={model.isFree}
-              onDisable={() => handleDisableModel(model.id)}
+              enabled={!disabledSet.has(model.id)}
+              onToggle={(next) => handleToggleModel(model.id, next)}
               caps={getCaps(`${providerId}/${model.id}`)}
               thinkingSuffix={resolveThinkingSuffix(model.id)}
             />
@@ -1349,25 +1401,6 @@ export default function ProviderDetailPage() {
           );
         })()}
 
-        {/* Disabled models — restorable */}
-        {disabledDisplayModels.length > 0 && (
-          <div className="w-full mt-2">
-            <p className="text-xs text-text-muted mb-2">Disabled models ({disabledDisplayModels.length}):</p>
-            <div className="flex flex-wrap gap-2">
-              {disabledDisplayModels.map((m) => (
-                <button
-                  key={m.id}
-                  onClick={() => handleEnableModel(m.id)}
-                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-dashed border-black/10 dark:border-white/10 text-xs text-text-muted hover:text-primary hover:border-primary/40 hover:bg-primary/5 transition-colors"
-                  title="Restore model"
-                >
-                  <span className="material-symbols-outlined text-[13px]">add</span>
-                  {m.id}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
     );
   };
@@ -1459,8 +1492,24 @@ export default function ProviderDetailPage() {
               {connections.length} connection{connections.length === 1 ? "" : "s"}
             </p>
           </div>
+          <Toggle
+            checked={!providerOff}
+            onChange={handleToggleProvider}
+            label={providerOff ? "Disabled" : "Enabled"}
+            title={providerOff ? "Enable provider" : "Disable provider"}
+            className="ml-auto shrink-0"
+          />
         </div>
       </div>
+
+      {providerOff && (
+        <div className="flex items-center gap-2 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2">
+          <span className="material-symbols-outlined shrink-0 text-[16px] text-yellow-500">pause_circle</span>
+          <p className="text-xs leading-relaxed text-yellow-700 dark:text-yellow-400">
+            This provider is disabled: requests to it are refused, combos skip it and its models are not listed.
+          </p>
+        </div>
+      )}
 
       {providerInfo.deprecated && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-yellow-500/10 border border-yellow-500/30">
@@ -1818,17 +1867,27 @@ export default function ProviderDetailPage() {
               </select>
             )}
           </div>
-          {!isCompatible && (() => {
-            const allIds = [
-              ...models,
-              ...kiloFreeModels.filter((fm) => !models.some((m) => m.id === fm.id)),
-            ].filter((m) => { const k = getModelKind(m); return !k || k === "llm"; }).map((m) => m.id);
+          {(() => {
+            const allIds = [...new Set([
+              ...(isCompatible ? [] : [
+                ...models,
+                ...kiloFreeModels.filter((fm) => !models.some((m) => m.id === fm.id)),
+              ].filter((m) => { const k = getModelKind(m); return !k || k === "llm"; }).map((m) => m.id)),
+              ...getProviderCustomModelRows({
+                customModels,
+                modelAliases,
+                providerAlias: providerStorageAlias,
+                builtInModels: isCompatible ? [] : models,
+                type: "llm",
+              }).map((m) => m.id),
+              ...syncedModels.map((m) => m.id),
+            ])];
             const activeIds = allIds.filter((id) => !disabledModelIds.includes(id));
             return (
               <div className="flex gap-2">
                 {disabledModelIds.length > 0 && (
                   <Button size="sm" variant="secondary" icon="restart_alt" onClick={handleEnableAll}>
-                    Active All
+                    Enable All
                   </Button>
                 )}
                 {activeIds.length > 0 && (

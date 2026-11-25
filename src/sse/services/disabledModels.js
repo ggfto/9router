@@ -1,14 +1,16 @@
-// Runtime enforcement for models disabled in the dashboard.
+// Runtime enforcement of the dashboard's provider and model switches.
 //
-// Until now `disabledModels` was only read by the listing endpoints
-// (/api/models, /v1/models) and the model picker, so disabling a model just hid
-// it from the UI while combos and direct /v1 calls kept routing to it.
+// Every route that reaches an upstream goes through getDisabledReason (or
+// filterDisabledModels for combo lists), so turning something off in the
+// dashboard stops traffic to it, not just its listing.
 //
-// The disabled ids are stored keyed by the provider's storage alias (built-in
+// Disabled model ids are stored keyed by the provider's storage alias (built-in
 // providers) or by the raw providerId (openai/anthropic-compatible nodes), so
 // every lookup has to try both — the same rule ModelSelectModal uses.
 import { getDisabledModels } from "@/lib/disabledModelsDb";
-import { getProviderAlias } from "@/shared/constants/providers.js";
+import { getDisabledProviders } from "@/lib/disabledProvidersDb";
+import { getProviderAlias, resolveProviderId } from "@/shared/constants/providers.js";
+import { stripThinkingSuffix } from "open-sse/translator/concerns/thinkingUnified.js";
 import { getModelInfo } from "./model.js";
 import * as log from "../utils/logger.js";
 
@@ -26,6 +28,21 @@ export async function getDisabledModelMap() {
   }
 }
 
+/** Disabled provider ids as a Set. Fails open like getDisabledModelMap. */
+export async function getDisabledProviderSet() {
+  try {
+    return new Set(await getDisabledProviders());
+  } catch (error) {
+    log.warn("MODELS", `Could not read disabled providers: ${error.message}`);
+    return new Set();
+  }
+}
+
+export async function isProviderDisabled(provider) {
+  if (!provider) return false;
+  return (await getDisabledProviderSet()).has(resolveProviderId(provider));
+}
+
 /**
  * Check a resolved provider/model pair against an already-loaded map.
  */
@@ -35,17 +52,28 @@ export function isDisabledInMap(disabledMap, provider, model) {
     ...(disabledMap[getProviderAlias(provider)] || []),
     ...(disabledMap[provider] || []),
   ];
-  return ids.includes(model);
+  // "model(high)" reaches the same upstream model as "model", so the thinking
+  // suffix must not be a way around the switch.
+  return ids.includes(model) || ids.includes(stripThinkingSuffix(model));
 }
 
 /**
- * Hard gate for the single-model path.
+ * Hard gate for the single-target path.
  * @param {string} provider - Resolved provider id
- * @param {string} model - Resolved model id
- * @returns {Promise<boolean>} true when the model must not be routed
+ * @param {string|null} [model] - Resolved model id (omit for provider-as-model routes)
+ * @param {string|null} [requested] - Name the client sent, used in the message
+ * @returns {Promise<string|null>} why the route is blocked, or null
  */
+export async function getDisabledReason(provider, model = null, requested = null) {
+  if (await isProviderDisabled(provider)) return `Provider "${provider}" is disabled`;
+  if (model && isDisabledInMap(await getDisabledModelMap(), provider, model)) {
+    return `Model "${requested || model}" is disabled`;
+  }
+  return null;
+}
+
 export async function isModelDisabled(provider, model) {
-  return isDisabledInMap(await getDisabledModelMap(), provider, model);
+  return (await getDisabledReason(provider, model)) !== null;
 }
 
 /**
@@ -60,7 +88,8 @@ export async function filterDisabledModels(models) {
   if (!Array.isArray(models) || models.length === 0) return models;
 
   const disabledMap = await getDisabledModelMap();
-  if (Object.keys(disabledMap).length === 0) return models;
+  const disabledProviders = await getDisabledProviderSet();
+  if (Object.keys(disabledMap).length === 0 && disabledProviders.size === 0) return models;
 
   const kept = [];
   for (const modelStr of models) {
@@ -70,11 +99,24 @@ export async function filterDisabledModels(models) {
     } catch {
       // Unresolvable entry — keep it and let the normal path report the error.
     }
-    if (info?.provider && isDisabledInMap(disabledMap, info.provider, info.model)) {
+    if (info?.provider && (
+      disabledProviders.has(resolveProviderId(info.provider))
+      || isDisabledInMap(disabledMap, info.provider, info.model)
+    )) {
       log.debug("MODELS", `Skipping disabled model "${modelStr}"`);
       continue;
     }
     kept.push(modelStr);
   }
   return kept;
+}
+
+/**
+ * Same idea for search/fetch combos, where each entry is a provider.
+ * @param {string[]} providers
+ */
+export async function filterDisabledProviders(providers) {
+  const disabled = await getDisabledProviderSet();
+  if (disabled.size === 0) return providers;
+  return providers.filter((p) => !disabled.has(resolveProviderId(p)));
 }

@@ -1,7 +1,7 @@
 import PropTypes from "prop-types";
-import { CapacityBadges } from "@/shared/components";
+import { CapacityBadges, Toggle } from "@/shared/components";
 
-export default function ModelRow({ model, fullModel, alias, copied, onCopy, testStatus, isCustom, isFree, onDeleteAlias, onTest, isTesting, onDisable, caps, thinkingSuffix }) {
+export default function ModelRow({ model, fullModel, alias, copied, onCopy, testStatus, isCustom, isFree, onDeleteAlias, onTest, isTesting, enabled = true, onToggle, caps, thinkingSuffix }) {
   const displayModel = thinkingSuffix ? `${fullModel}(${thinkingSuffix})` : fullModel;
   const borderColor = testStatus === "ok"
     ? "border-green-500/40"
@@ -19,12 +19,12 @@ export default function ModelRow({ model, fullModel, alias, copied, onCopy, test
     <div className={`group w-full sm:w-auto min-w-0 max-w-full rounded-lg border px-3 py-2 ${borderColor} hover:bg-sidebar/50`}>
       <div className="flex min-w-0 items-start gap-2 sm:items-center">
         <span
-          className="material-symbols-outlined shrink-0 text-base mt-0.5 sm:mt-0"
+          className={`material-symbols-outlined shrink-0 text-base mt-0.5 sm:mt-0 ${enabled ? "" : "opacity-40"}`}
           style={iconColor ? { color: iconColor } : undefined}
         >
           {testStatus === "ok" ? "check_circle" : testStatus === "error" ? "cancel" : "smart_toy"}
         </span>
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <div className={`flex min-w-0 flex-1 flex-col gap-1 ${enabled ? "" : "opacity-40"}`}>
           <code className="w-fit max-w-full break-all rounded bg-sidebar px-1.5 py-0.5 font-mono text-xs text-text-muted sm:max-w-[360px] sm:truncate">{displayModel}</code>
           <span className="flex min-w-0 items-center text-[9px] gap-1 pl-1">
             {model.name && <span className="break-all sm:truncate text-[9px] italic text-text-muted/70">{model.name}</span>}
@@ -32,7 +32,7 @@ export default function ModelRow({ model, fullModel, alias, copied, onCopy, test
           </span>
         </div>
         <div className="flex shrink-0 items-center gap-0.5 sm:gap-1">
-          {onTest && (
+          {onTest && enabled && (
             <div className="relative shrink-0 group/btn">
               <button
                 onClick={onTest}
@@ -61,7 +61,7 @@ export default function ModelRow({ model, fullModel, alias, copied, onCopy, test
               {copied === `model-${model.id}` ? "Copied!" : "Copy"}
             </span>
           </div>
-          {isCustom ? (
+          {isCustom && (
             <button
               onClick={onDeleteAlias}
               className="rounded p-0.5 text-text-muted opacity-100 transition-opacity hover:bg-red-500/10 hover:text-red-500 sm:opacity-0 sm:group-hover:opacity-100"
@@ -69,15 +69,16 @@ export default function ModelRow({ model, fullModel, alias, copied, onCopy, test
             >
               <span className="material-symbols-outlined text-sm">close</span>
             </button>
-          ) : onDisable ? (
-            <button
-              onClick={onDisable}
-              className="rounded p-0.5 text-text-muted opacity-100 transition-opacity hover:bg-red-500/10 hover:text-red-500 sm:opacity-0 sm:group-hover:opacity-100"
-              title="Disable this model"
-            >
-              <span className="material-symbols-outlined text-sm">close</span>
-            </button>
-          ) : null}
+          )}
+          {onToggle && (
+            <Toggle
+              size="sm"
+              checked={enabled}
+              onChange={onToggle}
+              title={enabled ? "Disable this model" : "Enable this model"}
+              className="shrink-0 pl-1"
+            />
+          )}
         </div>
       </div>
     </div>
@@ -98,7 +99,8 @@ ModelRow.propTypes = {
   onDeleteAlias: PropTypes.func,
   onTest: PropTypes.func,
   isTesting: PropTypes.bool,
-  onDisable: PropTypes.func,
+  enabled: PropTypes.bool,
+  onToggle: PropTypes.func,
   caps: PropTypes.object,
   thinkingSuffix: PropTypes.string,
 };

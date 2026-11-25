@@ -69,6 +69,9 @@ const DEFAULT_SETTINGS = {
   pxpipeTimeoutMs: 15000,
   // Per-provider user header overrides applied at dispatch: { [providerId]: { headers: {..} } }
   providerOverrides: {},
+  // Periodic refresh of each enabled provider's model list (5-field cron, server time)
+  modelSyncEnabled: false,
+  modelSyncCron: "0 */6 * * *",
 };
 
 async function readRaw() {

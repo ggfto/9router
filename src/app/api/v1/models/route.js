@@ -9,6 +9,8 @@ import {
 } from "@/shared/constants/providers";
 import { getProviderConnections, getCombos, getCustomModels, getModelAliases } from "@/lib/localDb";
 import { getDisabledModels } from "@/lib/disabledModelsDb";
+import { getDisabledProviders } from "@/lib/disabledProvidersDb";
+import { getSyncedModels } from "@/lib/syncedModelsDb";
 import { getKeyAccessContext, filterModelsListForKey } from "@/sse/services/keyAccess.js";
 import { resolveKiroModels } from "open-sse/services/kiroModels.js";
 import { resolveKimchiModels } from "open-sse/services/kimchiModels.js";
@@ -368,10 +370,29 @@ export async function buildModelsList(kindFilter, options = {}) {
   // 9router instance's fetchCompatibleModelIds — skip dynamic fetch to break
   // cross-instance recursive loops.
   const skipDynamicFetch = options.skipDynamicFetch === true;
+  let disabledProviders = new Set();
+  try {
+    disabledProviders = new Set(await getDisabledProviders());
+  } catch (e) {
+    console.log("Could not fetch disabled providers");
+  }
+  const isProviderOff = (aliasOrId) => disabledProviders.has(ALIAS_TO_PROVIDER_ID[aliasOrId] || aliasOrId);
+
+  let syncedByProvider = {};
+  try {
+    syncedByProvider = await getSyncedModels();
+  } catch (e) {
+    console.log("Could not fetch synced models");
+  }
+
   let connections = [];
+  // The static catalog is only a fallback for "nothing configured at all":
+  // switching every provider off must not expose every model.
+  let hasStoredConnections = false;
   try {
     connections = await getProviderConnections();
-    connections = connections.filter(c => c.isActive !== false);
+    hasStoredConnections = connections.length > 0;
+    connections = connections.filter(c => c.isActive !== false && !disabledProviders.has(c.provider));
   } catch (e) {
     console.log("Could not fetch providers, returning all models");
   }
@@ -414,7 +435,7 @@ export async function buildModelsList(kindFilter, options = {}) {
 
   // Include no-auth free providers (e.g. opencode) so their models are exposed in /v1/models
   for (const [id, provider] of Object.entries(FREE_PROVIDERS || {})) {
-    if (provider?.noAuth && !activeConnectionByProvider.has(id)) {
+    if (provider?.noAuth && !disabledProviders.has(id) && !activeConnectionByProvider.has(id)) {
       activeConnectionByProvider.set(id, {
         id: "noauth",
         provider: id,
@@ -455,11 +476,11 @@ export async function buildModelsList(kindFilter, options = {}) {
     models.push(entry);
   }
 
-  if (connections.length === 0) {
+  if (!hasStoredConnections) {
     // DB unavailable -> return static models, filtered by per-model kind
     for (const [alias, providerModels] of Object.entries(PROVIDER_MODELS)) {
       const providerId = ALIAS_TO_PROVIDER_ID[alias] || alias;
-      if (!providerMatchesKinds(providerId, kindFilter)) continue;
+      if (isProviderOff(providerId) || !providerMatchesKinds(providerId, kindFilter)) continue;
       for (const model of providerModels) {
         if (!kindFilter.includes(modelKind(model))) continue;
         if (isDisabled(alias, model.id) || isDisabled(providerId, model.id)) continue;
@@ -477,7 +498,7 @@ export async function buildModelsList(kindFilter, options = {}) {
       // Custom models without active connection are LLM-only by current schema
       if (!kindFilter.includes(LLM_KIND)) continue;
       const providerAlias = customModel.providerAlias;
-      if (!providerAlias) continue;
+      if (!providerAlias || isProviderOff(providerAlias)) continue;
 
       const modelId = String(customModel.id).trim();
       if (!modelId) continue;
@@ -511,6 +532,9 @@ export async function buildModelsList(kindFilter, options = {}) {
       );
       let liveModelKindById = new Map();
       let liveCapabilitiesById = new Map();
+      const syncedModels = syncedByProvider[providerId]?.models || [];
+      const syncedKindById = new Map(syncedModels.map((m) => [m.id, m.kind]));
+      let hasLiveCatalog = false;
 
       let rawModelIds = hasExplicitEnabledModels
         ? Array.from(
@@ -522,7 +546,7 @@ export async function buildModelsList(kindFilter, options = {}) {
           )
         : providerModels.map((model) => model.id);
 
-      if (isCompatibleProvider && rawModelIds.length === 0 && !skipDynamicFetch) {
+      if (isCompatibleProvider && rawModelIds.length === 0 && syncedModels.length === 0 && !skipDynamicFetch) {
         rawModelIds = await fetchCompatibleModelIds(conn);
       }
 
@@ -535,6 +559,7 @@ export async function buildModelsList(kindFilter, options = {}) {
           const live = await liveResolver(conn);
           if (live?.models?.length) {
             rawModelIds = live.models.map((m) => m.id);
+            hasLiveCatalog = true;
             liveModelKindById = new Map(
               live.models
                 .filter((m) => m?.id)
@@ -549,6 +574,12 @@ export async function buildModelsList(kindFilter, options = {}) {
         } catch (err) {
           console.log(`Live model fetch failed for ${providerId}: ${err?.message || err}`);
         }
+      }
+
+      // Models found by the provider sync add to the static list. A live catalog
+      // is fresher than the cache, and an explicit selection wins over both.
+      if (!hasLiveCatalog && !hasExplicitEnabledModels) {
+        rawModelIds = Array.from(new Set([...rawModelIds, ...syncedKindById.keys()]));
       }
 
       const modelIds = rawModelIds
@@ -613,7 +644,7 @@ export async function buildModelsList(kindFilter, options = {}) {
         // Resolve kind: prefer custom/live metadata, then static, then ID heuristics.
         const customKind = customModelKindById.get(modelId);
         const liveKind = liveModelKindById.get(modelId);
-        const kind = customKind || liveKind || staticModelKindById.get(modelId) || inferKindFromUnknownModelId(modelId);
+        const kind = customKind || liveKind || staticModelKindById.get(modelId) || syncedKindById.get(modelId) || inferKindFromUnknownModelId(modelId);
         // imageToText custom models stay in the LLM list (vision-capable chat models)
         const allowAsLlm = kind === "imageToText" && kindFilter.includes(LLM_KIND);
         if (!kindFilter.includes(kind) && !allowAsLlm) continue;

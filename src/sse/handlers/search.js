@@ -14,6 +14,7 @@ import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { handleComboChat, getComboModelsFromData } from "open-sse/services/combo.js";
 import { getKeyAccessContext, enforceKeyAccessProvider } from "../services/keyAccess.js";
+import { getDisabledReason, filterDisabledProviders } from "../services/disabledModels.js";
 
 /**
  * Handle web search request for the SSE/Next.js server.
@@ -78,13 +79,17 @@ export async function handleSearch(request) {
   const keyAccessDenied = await enforceKeyAccessProvider(await getKeyAccessContext(request), providerInput, comboModels);
   if (keyAccessDenied) return keyAccessDenied;
   if (comboModels) {
+    const enabledProviders = await filterDisabledProviders(comboModels);
+    if (enabledProviders.length === 0) {
+      return errorResponse(HTTP_STATUS.BAD_REQUEST, `All providers in combo "${providerInput}" are disabled`);
+    }
     const comboStrategies = settings.comboStrategies || {};
     const comboStrategy = comboStrategies[providerInput]?.fallbackStrategy || settings.comboStrategy || "fallback";
     const comboStickyLimit = settings.comboStickyRoundRobinLimit;
     log.info("SEARCH", `Combo "${providerInput}" with ${comboModels.length} providers (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
     return handleComboChat({
       body,
-      models: comboModels,
+      models: enabledProviders,
       handleSingleModel: (b, m) => handleSingleProviderSearch(b, m, request, apiKey, settings),
       log,
       comboName: providerInput,
@@ -112,6 +117,12 @@ async function handleSingleProviderSearch(body, providerInput, request, apiKey, 
   if (!supportsSearch) {
     log.warn("SEARCH", "Provider does not support web search", { provider: providerId });
     return errorResponse(HTTP_STATUS.BAD_REQUEST, `Provider ${providerId} does not support web search`);
+  }
+
+  const disabledReason = await getDisabledReason(providerId);
+  if (disabledReason) {
+    log.warn("SEARCH", disabledReason, { provider: providerId });
+    return errorResponse(HTTP_STATUS.FORBIDDEN, disabledReason);
   }
 
   if (providerInput !== providerId) {

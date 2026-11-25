@@ -10,5 +10,8 @@ export async function register() {
 
     const { startModelCatalogSync } = await import("@/lib/modelCatalog/sync.js");
     startModelCatalogSync();
+
+    const { configureModelSync } = await import("@/lib/modelSync/scheduler.js");
+    await configureModelSync().catch((error) => console.log("[modelSync] start failed:", error.message));
   }
 }

@@ -31,6 +31,8 @@ export async function POST(request) {
       return NextResponse.json({ error: "Invalid password" }, { status: 401 });
     }
     await importDb(payload);
+    const { configureModelSync } = await import("@/lib/modelSync/scheduler.js");
+    await configureModelSync().catch(() => {});
 
     // Ensure proxy settings take effect immediately after a DB import.
     try {

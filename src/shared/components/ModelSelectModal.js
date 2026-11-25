@@ -224,6 +224,38 @@ export default function ModelSelectModal({
     if (isOpen) fetchDisabledModels();
   }, [isOpen]);
 
+  const [switchedOffProviders, setSwitchedOffProviders] = useState([]);
+  const [syncedByProvider, setSyncedByProvider] = useState({});
+
+  useEffect(() => {
+    if (!isOpen) return;
+    fetch("/api/providers/disabled", { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setSwitchedOffProviders(data?.disabled || []))
+      .catch(() => setSwitchedOffProviders([]));
+    fetch("/api/models/sync", { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setSyncedByProvider(data?.providers || {}))
+      .catch(() => setSyncedByProvider({}));
+  }, [isOpen]);
+
+  // Models found by the provider sync behave like user-added ones in the picker.
+  const selectableCustomModels = useMemo(() => {
+    const known = new Set(customModels.map((m) => `${m.providerAlias}|${m.id}`));
+    const synced = [];
+    for (const [providerId, entry] of Object.entries(syncedByProvider)) {
+      const isNode = isOpenAICompatibleProvider(providerId) || isAnthropicCompatibleProvider(providerId);
+      const providerAlias = isNode ? providerId : getProviderAlias(providerId);
+      const builtIn = new Set(getModelsByProviderId(providerId).map((m) => m.id));
+      for (const model of entry?.models || []) {
+        if (builtIn.has(model.id) || known.has(`${providerAlias}|${model.id}`)) continue;
+        if (model.kind !== (kindFilter || "llm")) continue;
+        synced.push({ providerAlias, id: model.id, name: model.name, type: model.kind });
+      }
+    }
+    return [...customModels, ...synced];
+  }, [customModels, syncedByProvider, kindFilter]);
+
   const allProviders = useMemo(() => ({ ...OAUTH_PROVIDERS, ...FREE_PROVIDERS, ...FREE_TIER_PROVIDERS, ...APIKEY_PROVIDERS }), []);
 
   // Group models by provider with priority order
@@ -257,6 +289,8 @@ export default function ModelSelectModal({
       return models.filter((m) => m.isPlaceholder || getModelKind(m) === kindFilter);
     };
 
+    const isSwitchedOff = (id) => deactivatedProviderIds.has(id) || switchedOffProviders.includes(id);
+
     // Get all active provider IDs from connections (filtered by kindFilter if set)
     const activeConnectionIds = filteredActiveProviders.map(p => p.provider);
 
@@ -274,7 +308,7 @@ export default function ModelSelectModal({
     const existingNodeIds = new Set((providerNodes || []).map((n) => n?.id).filter(Boolean));
     const compatibleNodeIds = kindFilter
       ? []
-      : customModels
+      : selectableCustomModels
           .map((m) => m.providerAlias)
           .filter((alias) =>
             (isOpenAICompatibleProvider(alias) || isAnthropicCompatibleProvider(alias)) &&
@@ -287,7 +321,7 @@ export default function ModelSelectModal({
       ...activeConnectionIds,  // Only connected providers
       ...noAuthIds,            // No-auth providers (kind-filtered)
       ...compatibleNodeIds,    // Compatible nodes with user-added models
-    ].filter((id) => !deactivatedProviderIds.has(id)));
+    ].filter((id) => !isSwitchedOff(id)));
 
     // Sort by PROVIDER_ORDER
     const sortedProviderIds = [...providerIdsToShow].sort((a, b) => {
@@ -320,7 +354,7 @@ export default function ModelSelectModal({
             name: aliasName,
             value: fullModel,
           }));
-        const customRegisteredModels = customModels
+        const customRegisteredModels = selectableCustomModels
           .filter((m) => m.providerAlias === alias)
           .map((m) => ({
             id: m.id,
@@ -390,7 +424,7 @@ export default function ModelSelectModal({
 
         // Merge custom models registered via /api/models/custom for this provider
         // providerAlias in DB uses the raw providerId, not the display prefix
-        const registeredCustom = customModels
+        const registeredCustom = selectableCustomModels
           .filter((m) => m.providerAlias === providerId)
           .map((m) => ({
             id: m.id,
@@ -441,7 +475,7 @@ export default function ModelSelectModal({
 
         // Custom models registered via /api/models/custom (provider "Add Model" button)
         const customAliasIds = new Set(customAliasModels.map((m) => m.id));
-        const customRegisteredModels = customModels
+        const customRegisteredModels = selectableCustomModels
           .filter((m) => m.providerAlias === alias && !hardcodedIds.has(m.id) && !customAliasIds.has(m.id))
           .map((m) => ({ id: m.id, name: m.name || m.id, value: `${alias}/${m.id}`, isCustom: true }));
 
@@ -513,7 +547,7 @@ export default function ModelSelectModal({
     });
 
     return groups;
-  }, [filteredActiveProviders, modelAliases, allProviders, providerNodes, customModels, disabledModels, kindFilter, effectiveConnections, deactivatedProviderIds, cursorModels, clineModels, clinepassModels, zedModels, claudeModels, commandcodeModels]);
+  }, [filteredActiveProviders, modelAliases, allProviders, providerNodes, selectableCustomModels, switchedOffProviders, disabledModels, kindFilter, effectiveConnections, deactivatedProviderIds, cursorModels, clineModels, clinepassModels, zedModels, claudeModels, commandcodeModels]);
 
   // Parse search query into structured query (regex, positive tokens, negative tokens)
   const parsedQuery = useMemo(() => parseSearchQuery(searchQuery), [searchQuery]);

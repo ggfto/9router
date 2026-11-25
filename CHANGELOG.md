@@ -1,8 +1,22 @@
 # Unreleased
 
+## Features
+- **Providers**: provider-level on/off switch, independent from each account's
+  switch. It also covers no-auth providers and is enforced on every `/v1` route.
+- **Models**: a switch on every model row (built-in, custom, synced and
+  compatible providers); turning a model off no longer hides or removes it.
+- **Model sync**: optional cron-scheduled refresh of each enabled provider's
+  model list (Settings > Model Sync), with a "Sync now" button.
+
 ## Fixes
 - **Security**: `/api/usage/*` no longer serializes raw API keys as `byApiKey`
   property names (GHSA-vjc7); they are now the masked key plus a short digest.
+- **Providers**: turning every provider off no longer makes `/v1/models` list the
+  whole static catalog.
+- **Models**: a disabled model could still be reached with a thinking suffix
+  (`model(high)`), through `/v1/systemone`, the smart combo router and the
+  Gemini-native route.
+- **Backup**: database export/import now carries the disabled models and providers.
 - **Proxy-Pools**: the pool now actually applies to the traffic it was bound to.
   `strictProxy` never reached the request path (`auth.js` dropped it when
   building `providerSpecificData`, `chatCore` never read it), so a strict pool

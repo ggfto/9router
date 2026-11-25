@@ -7,7 +7,7 @@ import {
 } from "../services/auth.js";
 import { getSettings, getProviderConnectionById } from "@/lib/localDb";
 import { getModelInfo } from "../services/model.js";
-import { isModelDisabled } from "../services/disabledModels.js";
+import { getDisabledReason } from "../services/disabledModels.js";
 import { getKeyAccessContext, enforceKeyAccessResolved } from "../services/keyAccess.js";
 import { handleVideoProxyCore, getVideoConfig, sanitizeSecrets } from "open-sse/handlers/videoCore.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
@@ -80,7 +80,7 @@ async function readForwardableBody(request) {
 }
 
 async function resolveVideoProvider(parsedBody) {
-  if (!parsedBody?.model) return { provider: DEFAULT_VIDEO_PROVIDER, model: null };
+  if (!parsedBody?.model) return checkVideoRoute(DEFAULT_VIDEO_PROVIDER, null, null);
 
   const modelStr = String(parsedBody.model);
   const modelInfo = await getModelInfo(modelStr);
@@ -91,15 +91,20 @@ async function resolveVideoProvider(parsedBody) {
     // Bare model ids (no explicit "provider/" prefix) fall back to the default
     // video provider — the prefix-less inference targets chat providers only.
     if (!modelStr.includes("/")) {
-      return { provider: DEFAULT_VIDEO_PROVIDER, model: modelStr };
+      return checkVideoRoute(DEFAULT_VIDEO_PROVIDER, modelStr, modelStr);
     }
     return { error: errorResponse(HTTP_STATUS.BAD_REQUEST, `Provider '${modelInfo.provider}' does not support video generation`) };
   }
-  if (await isModelDisabled(modelInfo.provider, modelInfo.model)) {
-    log.warn("VIDEO", `Model "${modelStr}" is disabled`, { provider: modelInfo.provider, model: modelInfo.model });
-    return { error: errorResponse(HTTP_STATUS.FORBIDDEN, `Model "${modelStr}" is disabled`) };
+  return checkVideoRoute(modelInfo.provider, modelInfo.model, modelStr);
+}
+
+async function checkVideoRoute(provider, model, modelStr) {
+  const disabledReason = await getDisabledReason(provider, model, modelStr);
+  if (disabledReason) {
+    log.warn("VIDEO", disabledReason, { provider, model });
+    return { error: errorResponse(HTTP_STATUS.FORBIDDEN, disabledReason) };
   }
-  return { provider: modelInfo.provider, model: modelInfo.model };
+  return { provider, model };
 }
 
 function withConnectionHeader(response, connectionId) {

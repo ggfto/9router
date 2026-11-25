@@ -99,6 +99,7 @@ const APIKEY_INITIAL_VISIBLE = 20;
 export default function ProvidersPage() {
   const [connections, setConnections] = useState([]);
   const [providerNodes, setProviderNodes] = useState([]);
+  const [disabledProviders, setDisabledProviders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAllApikey, setShowAllApikey] = useState(false);
   const [showAddCompatibleModal, setShowAddCompatibleModal] = useState(false);
@@ -152,10 +153,12 @@ export default function ProvidersPage() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [connectionsRes, nodesRes] = await Promise.all([
+        const [connectionsRes, nodesRes, disabledRes] = await Promise.all([
           fetch("/api/providers"),
           fetch("/api/provider-nodes"),
+          fetch("/api/providers/disabled", { cache: "no-store" }),
         ]);
+        if (disabledRes.ok) setDisabledProviders((await disabledRes.json()).disabled || []);
         const connectionsData = await connectionsRes.json();
         const nodesData = await nodesRes.json();
         if (connectionsRes.ok)
@@ -200,8 +203,10 @@ export default function ProvidersPage() {
 
     const error = errorConns.length;
     const total = providerConnections.length;
+    // Off when the provider switch is off, or every account is individually off
     const allDisabled =
-      total > 0 && providerConnections.every((c) => c.isActive === false);
+      disabledProviders.includes(providerId) ||
+      (total > 0 && providerConnections.every((c) => c.isActive === false));
 
     const latestError = errorConns.sort(
       (a, b) => new Date(b.lastErrorAt || 0) - new Date(a.lastErrorAt || 0),
@@ -217,25 +222,30 @@ export default function ProvidersPage() {
   const matchStatus = (stats, isNoAuth) =>
     matchesStatusFilter(statusFilter, stats, isNoAuth);
 
-  // Toggle all connections for a provider on/off. authType may be a single
-  // string or an array (kiro counts oauth + api_key/apikey together).
-  const handleToggleProvider = async (providerId, authType, newActive) => {
-    const authTypes = Array.isArray(authType) ? authType : [authType];
-    const matches = (c) =>
-      c.provider === providerId && authTypes.includes(c.authType);
-    const providerConns = connections.filter(matches);
-    setConnections((prev) =>
-      prev.map((c) => (matches(c) ? { ...c, isActive: newActive } : c)),
+  // Provider-level switch. Each account keeps its own on/off state.
+  const handleToggleProvider = async (providerId, newActive) => {
+    const previous = disabledProviders;
+    setDisabledProviders(
+      newActive
+        ? previous.filter((id) => id !== providerId)
+        : [...previous, providerId],
     );
-    await Promise.allSettled(
-      providerConns.map((c) =>
-        fetch(`/api/providers/${c.id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ isActive: newActive }),
-        }),
-      ),
-    );
+    try {
+      const res = await fetch("/api/providers/disabled", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ providerId, disabled: !newActive }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if ((await res.json()).reactivated > 0) {
+        const connectionsRes = await fetch("/api/providers", { cache: "no-store" });
+        if (connectionsRes.ok) setConnections((await connectionsRes.json()).connections || []);
+      }
+    } catch (error) {
+      console.log("Error toggling provider:", error);
+      setDisabledProviders(previous);
+      notify.error("Could not update the provider");
+    }
   };
 
   const handleBatchTest = async (mode, providerId = null) => {
@@ -473,7 +483,7 @@ export default function ProvidersPage() {
                   stats={getProviderStats(info.id, "apikey")}
                   authType="compatible"
                   onToggle={(active) =>
-                    handleToggleProvider(info.id, "apikey", active)
+                    handleToggleProvider(info.id, active)
                   }
                 />
               ),
@@ -521,7 +531,7 @@ export default function ProvidersPage() {
                 provider={info}
                 stats={getProviderStats(key, authTypes)}
                 authType="oauth"
-                onToggle={(active) => handleToggleProvider(key, authTypes, active)}
+                onToggle={(active) => handleToggleProvider(key, active)}
               />
             );
           })}
@@ -568,7 +578,7 @@ export default function ProvidersPage() {
                 stats={getProviderStats(key, freeAuthTypes)}
                 authType="free"
                 onToggle={(active) =>
-                  handleToggleProvider(key, freeAuthTypes, active)
+                  handleToggleProvider(key, active)
                 }
               />
             );
@@ -582,7 +592,7 @@ export default function ProvidersPage() {
                 provider={info}
                 stats={getProviderStats(key, freeAuthTypes)}
                 authType={Array.isArray(freeAuthTypes) ? (freeAuthTypes[0] ?? "apikey") : freeAuthTypes}
-                onToggle={(active) => handleToggleProvider(key, freeAuthTypes, active)}
+                onToggle={(active) => handleToggleProvider(key, active)}
               />
             );
           })}
@@ -624,7 +634,7 @@ export default function ProvidersPage() {
               provider={info}
               stats={getProviderStats(key, "apikey")}
               authType="apikey"
-              onToggle={(active) => handleToggleProvider(key, "apikey", active)}
+              onToggle={(active) => handleToggleProvider(key, active)}
             />
           ))}
           {webCookieEntries.map(([key, info]) => (
@@ -634,7 +644,7 @@ export default function ProvidersPage() {
               provider={info}
               stats={getProviderStats(key, "cookie")}
               authType="cookie"
-              onToggle={(active) => handleToggleProvider(key, "cookie", active)}
+              onToggle={(active) => handleToggleProvider(key, active)}
             />
           ))}
         </div>
@@ -768,7 +778,7 @@ function ProviderCard({ providerId, provider, stats, authType, onToggle }) {
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            {stats.total > 0 && (
+            {(stats.total > 0 || provider.noAuth || allDisabled) && (
               <div
                 className="opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100"
                 onClick={(e) => {
@@ -906,7 +916,7 @@ function ApiKeyProviderCard({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            {stats.total > 0 && (
+            {(stats.total > 0 || provider.noAuth || allDisabled) && (
               <div
                 className="opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100"
                 onClick={(e) => {

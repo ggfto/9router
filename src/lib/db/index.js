@@ -56,6 +56,8 @@ export {
 export {
   getDisabledModels, getDisabledByProvider, disableModels, enableModels,
 } from "./repos/disabledModelsRepo.js";
+export { getDisabledProviders, setProviderDisabled } from "./repos/disabledProvidersRepo.js";
+export { getSyncedModels, setSyncedModels } from "./repos/syncedModelsRepo.js";
 
 // Usage
 export {
@@ -85,7 +87,12 @@ export async function exportDb() {
     customModels: [],
     mitmAlias: {},
     pricing: {},
+    disabledModels: {},
+    disabledProviders: [],
   };
+
+  for (const r of db.all(`SELECT key, value FROM kv WHERE scope = 'disabledModels'`)) out.disabledModels[r.key] = parseJson(r.value, []);
+  out.disabledProviders = db.all(`SELECT key FROM kv WHERE scope = 'disabledProviders'`).map((r) => r.key);
 
   for (const r of db.all(`SELECT key, value FROM kv WHERE scope = 'modelAliases'`)) out.modelAliases[r.key] = parseJson(r.value);
   for (const r of db.all(`SELECT key, value FROM kv WHERE scope = 'customModels'`)) out.customModels.push(parseJson(r.value));
@@ -110,6 +117,21 @@ export async function importDb(payload) {
     db.run(`DELETE FROM apiKeys`);
     db.run(`DELETE FROM combos`);
     db.run(`DELETE FROM kv WHERE scope IN ('modelAliases', 'customModels', 'mitmAlias', 'pricing')`);
+
+    // Disable switches are only replaced when the backup carries them, so
+    // restoring an older backup does not silently turn everything back on.
+    if (payload.disabledModels) {
+      db.run(`DELETE FROM kv WHERE scope = 'disabledModels'`);
+      for (const [provider, ids] of Object.entries(payload.disabledModels)) {
+        db.run(`INSERT OR REPLACE INTO kv(scope, key, value) VALUES('disabledModels', ?, ?)`, [provider, stringifyJson(ids || [])]);
+      }
+    }
+    if (Array.isArray(payload.disabledProviders)) {
+      db.run(`DELETE FROM kv WHERE scope = 'disabledProviders'`);
+      for (const provider of payload.disabledProviders) {
+        db.run(`INSERT OR REPLACE INTO kv(scope, key, value) VALUES('disabledProviders', ?, ?)`, [provider, stringifyJson(true)]);
+      }
+    }
 
     // Settings
     if (payload.settings) {
