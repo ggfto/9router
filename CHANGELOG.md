@@ -1,4 +1,4 @@
-# Unreleased
+# v0.5.123-ggfto.1 (2026-11-25)
 
 ## Features
 - **Providers**: provider-level on/off switch, independent from each account's
