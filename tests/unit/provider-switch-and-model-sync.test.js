@@ -83,6 +83,19 @@ describe("provider switch", () => {
     await toggleProvider("opencode", false);
   });
 
+  it("sends a bare claude id to Claude OAuth when anthropic is switched off", async () => {
+    const { getModelInfo } = await import("@/sse/services/model.js");
+    await db.createProviderConnection({ provider: "anthropic", authType: "apikey", name: "key", apiKey: "sk-ant" });
+    await db.createProviderConnection({ provider: "claude", authType: "oauth", email: "a@example.com", accessToken: "t" });
+    await expect(getModelInfo("claude-sonnet-4-6")).resolves.toMatchObject({ provider: "anthropic" });
+    await db.setProviderDisabled("anthropic", true);
+    await expect(getModelInfo("claude-sonnet-4-6")).resolves.toMatchObject({ provider: "claude" });
+    await db.setProviderDisabled("anthropic", false);
+    for (const provider of ["anthropic", "claude"]) {
+      for (const c of await db.getProviderConnections({ provider })) await db.deleteProviderConnection(c.id);
+    }
+  });
+
   it("rejects a malformed body", async () => {
     expect((await toggleProvider("openai", "yes")).status).toBe(400);
   });

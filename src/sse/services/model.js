@@ -1,5 +1,6 @@
 // Re-export from open-sse with localDb integration
 import { getModelAliases, getComboByName, getProviderNodes, getProviderConnections } from "@/lib/localDb";
+import { getDisabledProviders } from "@/lib/disabledProvidersDb";
 import { parseModel as parseModelCore, resolveModelAliasFromMap, getModelInfoCore } from "open-sse/services/model.js";
 import REGISTRY from "open-sse/providers/registry/index.js";
 
@@ -99,8 +100,10 @@ export async function getComboModels(modelStr) {
 // Codex-only gpt-* rules in open-sse/services/model.js).
 async function fallbackToClaudeOAuth(info) {
   if (info?.provider !== "anthropic") return info;
-  const hasActive = async (provider) =>
-    (await getProviderConnections({ provider, isActive: true })).length > 0;
+  // A provider switched off in the dashboard counts as having no active account.
+  const switchedOff = await getDisabledProviders().catch(() => []);
+  const hasActive = async (provider) => !switchedOff.includes(provider)
+    && (await getProviderConnections({ provider, isActive: true })).length > 0;
   if (await hasActive("anthropic")) return info;
   if (!(await hasActive("claude"))) return info;
   return { ...info, provider: "claude" };
